@@ -35,6 +35,7 @@ public sealed class CurrencyCandidateSource
 
     public CandidateCatalogLoadResult LoadCatalog()
     {
+        var currencies = new List<TrackedCurrencyModel>();
         var items = new List<SpendableCurrencyItem>();
         var invalid = 0;
         var unmarketable = 0;
@@ -48,7 +49,7 @@ public sealed class CurrencyCandidateSource
                 LuminaAvailable: this.dataManager is not null,
                 LuminaItemSheetAvailable: false,
                 MarketabilityPath: "Item.ItemSearchCategory.RowId > 0 and Item.IsUntradable == false",
-                CandidateSourceType: "Lumina SpecialShop + optional JSON seed",
+                CandidateSourceType: "Lumina SpecialShop + standalone JSON currencies + validated JSON seed",
                 CandidateLoadStatus: "Item sheet unavailable.",
                 CandidateCount: 0,
                 CandidateInvalidCount: 0,
@@ -60,6 +61,7 @@ public sealed class CurrencyCandidateSource
         try
         {
             var specialShopResult = this.LoadSpecialShopCandidates(itemSheet);
+            currencies.AddRange(specialShopResult.Currencies);
             items.AddRange(specialShopResult.Candidates);
             invalid += specialShopResult.InvalidCount;
             unmarketable += specialShopResult.UnmarketableCount;
@@ -72,6 +74,7 @@ public sealed class CurrencyCandidateSource
         try
         {
             var seedResult = this.LoadSeedCandidates(itemSheet);
+            currencies.AddRange(seedResult.Currencies);
             items.AddRange(seedResult.Candidates);
             invalid += seedResult.InvalidCount;
             unmarketable += seedResult.UnmarketableCount;
@@ -81,46 +84,68 @@ public sealed class CurrencyCandidateSource
             lastError = $"Seed load failed: {ex.Message}";
         }
 
-        var deduped = new Dictionary<string, SpendableCurrencyItem>(StringComparer.Ordinal);
+        var dedupedItems = new Dictionary<string, SpendableCurrencyItem>(StringComparer.Ordinal);
         foreach (var candidate in items)
         {
             var key = $"{candidate.ItemId}:{candidate.CurrencyId}:{candidate.CurrencyName}:{candidate.Cost}:{candidate.QuantityReceived}:{candidate.SourceShopName}:{candidate.SourceVendorName}";
-            if (!deduped.TryAdd(key, candidate))
+            if (!dedupedItems.TryAdd(key, candidate))
             {
                 duplicates++;
             }
         }
 
-        var statusText = deduped.Count == 0
-            ? "No verified candidates loaded."
-            : $"Loaded {deduped.Count} verified candidate(s).";
+        currencies.AddRange(dedupedItems.Values.Select(item => new TrackedCurrencyModel(
+            item.CurrencyId,
+            item.CurrencyName,
+            item.CurrencyIconId,
+            null,
+            null,
+            true,
+            item.SourceNotes ?? item.SourceShopName ?? "Spendable item")));
 
-        var currencies = deduped.Values
-            .GroupBy(item => new { item.CurrencyId, item.CurrencyName, item.CurrencyIconId })
-            .Select(group => new TrackedCurrencyModel(
-                group.Key.CurrencyId,
-                group.Key.CurrencyName,
-                group.Key.CurrencyIconId,
-                null,
-                null,
-                true,
-                "Validated JSON seed"))
+        var dedupedCurrencies = new Dictionary<string, TrackedCurrencyModel>(StringComparer.Ordinal);
+        foreach (var currency in currencies)
+        {
+            if (currency.CurrencyId == 0 && string.IsNullOrWhiteSpace(currency.Name))
+            {
+                invalid++;
+                continue;
+            }
+
+            var key = $"{currency.CurrencyId}:{currency.Name}";
+            if (!dedupedCurrencies.TryGetValue(key, out var existing))
+            {
+                dedupedCurrencies[key] = currency;
+                continue;
+            }
+
+            if (existing.IconId == 0 && currency.IconId != 0)
+            {
+                dedupedCurrencies[key] = existing with { IconId = currency.IconId };
+            }
+        }
+
+        var currencyList = dedupedCurrencies.Values
             .OrderBy(currency => currency.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
+
+        var statusText = currencyList.Count == 0
+            ? "No currencies loaded. Add seed currencies or verify Lumina shop extraction."
+            : $"Loaded {currencyList.Count} currenc{(currencyList.Count == 1 ? "y" : "ies")} and {dedupedItems.Count} spendable item(s).";
 
         var status = new CandidateSourceStatus(
             LuminaAvailable: true,
             LuminaItemSheetAvailable: true,
             MarketabilityPath: "Item.ItemSearchCategory.RowId > 0 and Item.IsUntradable == false",
-            CandidateSourceType: "Lumina SpecialShop single cost/reward + validated JSON seed",
+            CandidateSourceType: "Lumina SpecialShop + standalone JSON currencies + validated JSON seed",
             CandidateLoadStatus: statusText,
-            CandidateCount: deduped.Count,
+            CandidateCount: dedupedItems.Count,
             CandidateInvalidCount: invalid,
             CandidateUnmarketableCount: unmarketable,
             CandidateDuplicateCount: duplicates,
             CandidateLastError: lastError);
 
-        return new CandidateCatalogLoadResult(currencies, deduped.Values.ToList(), status);
+        return new CandidateCatalogLoadResult(currencyList, dedupedItems.Values.ToList(), status);
     }
 
     public string ResolveItemName(uint itemId)
@@ -131,13 +156,14 @@ public sealed class CurrencyCandidateSource
 
     private CandidateBatch LoadSpecialShopCandidates(Lumina.Excel.ExcelSheet<Item> itemSheet)
     {
+        var currencies = new List<TrackedCurrencyModel>();
         var candidates = new List<SpendableCurrencyItem>();
         var invalid = 0;
         var unmarketable = 0;
         var shopSheet = this.dataManager.GetExcelSheet<SpecialShop>();
         if (shopSheet is null)
         {
-            return new CandidateBatch(candidates, invalid, unmarketable);
+            return new CandidateBatch(currencies, candidates, invalid, unmarketable);
         }
 
         foreach (var shop in shopSheet)
@@ -169,10 +195,25 @@ public sealed class CurrencyCandidateSource
                     continue;
                 }
 
-                if (!IsMarketable(item))
+                var currencyName = costItem.Name.ExtractText();
+                if (string.IsNullOrWhiteSpace(currencyName))
+                {
+                    currencyName = $"Currency {costItemId}";
+                }
+
+                currencies.Add(new TrackedCurrencyModel(
+                    costItemId,
+                    currencyName,
+                    costItem.Icon,
+                    null,
+                    null,
+                    true,
+                    string.IsNullOrWhiteSpace(shopName) ? $"SpecialShop {shop.RowId}" : shopName));
+
+                var marketable = IsMarketable(item);
+                if (!marketable)
                 {
                     unmarketable++;
-                    continue;
                 }
 
                 candidates.Add(new SpendableCurrencyItem(
@@ -180,14 +221,16 @@ public sealed class CurrencyCandidateSource
                     item.Name.ExtractText(),
                     item.Icon,
                     costItemId,
-                    costItem.Name.ExtractText(),
+                    currencyName,
                     costItem.Icon,
                     cost.CurrencyCost,
                     received.ReceiveCount,
                     null,
                     string.IsNullOrWhiteSpace(shopName) ? $"SpecialShop {shop.RowId}" : shopName,
                     null,
-                    $"Lumina SpecialShop row {shop.RowId}; single receive and single cost only.",
+                    marketable
+                        ? $"Lumina SpecialShop row {shop.RowId}; single receive and single cost."
+                        : $"Lumina SpecialShop row {shop.RowId}; non-marketable reward.",
                     null,
                     null,
                     null,
@@ -195,24 +238,25 @@ public sealed class CurrencyCandidateSource
                     null,
                     null,
                     null,
-                    SpendableItemKind.Sellable,
-                    true,
+                    marketable ? SpendableItemKind.Sellable : SpendableItemKind.Other,
+                    marketable,
                     false));
             }
         }
 
-        return new CandidateBatch(candidates, invalid, unmarketable);
+        return new CandidateBatch(currencies, candidates, invalid, unmarketable);
     }
 
     private CandidateBatch LoadSeedCandidates(Lumina.Excel.ExcelSheet<Item> itemSheet)
     {
+        var currencies = new List<TrackedCurrencyModel>();
         var candidates = new List<SpendableCurrencyItem>();
         var invalid = 0;
         var unmarketable = 0;
         var seedPath = Path.Combine(this.configDirectory, "currency-candidates.json");
         if (!File.Exists(seedPath))
         {
-            return new CandidateBatch(candidates, invalid, unmarketable);
+            return new CandidateBatch(currencies, candidates, invalid, unmarketable);
         }
 
         SeedCatalog? catalog = null;
@@ -233,35 +277,43 @@ public sealed class CurrencyCandidateSource
         catch
         {
             invalid++;
-            return new CandidateBatch(candidates, invalid, unmarketable);
+            return new CandidateBatch(currencies, candidates, invalid, unmarketable);
         }
 
-        var currencyMap = (catalog?.Currencies ?? [])
-            .Where(currency => currency.CurrencyId != 0 || !string.IsNullOrWhiteSpace(currency.CurrencyName))
-            .GroupBy(currency => currency.CurrencyId)
-            .ToDictionary(group => group.Key, group => group.First());
-
-        var seeds = legacySeeds ?? catalog?.Items;
-        if (seeds is null)
+        var seedCurrencies = catalog?.Currencies ?? [];
+        foreach (var seedCurrency in seedCurrencies)
         {
-            return new CandidateBatch(candidates, invalid, unmarketable);
-        }
-
-        foreach (var seed in seeds)
-        {
-            var currencyName = seed.CurrencyName;
-            var currencyIcon = 0u;
-            if (seed.CurrencyId != 0 && currencyMap.TryGetValue(seed.CurrencyId, out var seedCurrency))
-            {
-                currencyName = string.IsNullOrWhiteSpace(currencyName) ? seedCurrency.CurrencyName : currencyName;
-                currencyIcon = seedCurrency.IconId;
-            }
-
-            if (seed.ItemId == 0 || seed.Cost == 0 || seed.QuantityReceived == 0 || string.IsNullOrWhiteSpace(currencyName))
+            var model = this.BuildCurrencyModel(itemSheet, seedCurrency.CurrencyId, seedCurrency.CurrencyName, seedCurrency.IconId, seedCurrency.MaxAmount, "JSON seed currency");
+            if (model is null)
             {
                 invalid++;
                 continue;
             }
+
+            currencies.Add(model);
+        }
+
+        var seeds = legacySeeds ?? catalog?.Items;
+        if (seeds is null)
+        {
+            return new CandidateBatch(currencies, candidates, invalid, unmarketable);
+        }
+
+        foreach (var seed in seeds)
+        {
+            var seedCurrency = seedCurrencies.FirstOrDefault(currency => currency.CurrencyId != 0 && currency.CurrencyId == seed.CurrencyId);
+            var currencyName = string.IsNullOrWhiteSpace(seed.CurrencyName) ? seedCurrency?.CurrencyName ?? string.Empty : seed.CurrencyName;
+            var currencyIcon = seedCurrency?.IconId ?? 0u;
+            var currencyMax = seedCurrency?.MaxAmount;
+
+            var currencyModel = this.BuildCurrencyModel(itemSheet, seed.CurrencyId, currencyName, currencyIcon, currencyMax, "JSON seed item");
+            if (currencyModel is null || seed.ItemId == 0 || seed.Cost == 0 || seed.QuantityReceived == 0)
+            {
+                invalid++;
+                continue;
+            }
+
+            currencies.Add(currencyModel);
 
             var item = itemSheet.GetRow(seed.ItemId);
             if (item.RowId != seed.ItemId)
@@ -270,28 +322,19 @@ public sealed class CurrencyCandidateSource
                 continue;
             }
 
-            if (!IsMarketable(item))
+            var marketable = IsMarketable(item);
+            if (!marketable)
             {
                 unmarketable++;
-                continue;
-            }
-
-            if (currencyIcon == 0 && seed.CurrencyId != 0)
-            {
-                var currencyItem = itemSheet.GetRow(seed.CurrencyId);
-                if (currencyItem.RowId == seed.CurrencyId)
-                {
-                    currencyIcon = currencyItem.Icon;
-                }
             }
 
             candidates.Add(new SpendableCurrencyItem(
                 seed.ItemId,
                 item.Name.ExtractText(),
                 item.Icon,
-                seed.CurrencyId,
-                currencyName,
-                currencyIcon,
+                currencyModel.CurrencyId,
+                currencyModel.Name,
+                currencyModel.IconId,
                 seed.Cost,
                 seed.QuantityReceived,
                 seed.SourceVendorName,
@@ -305,12 +348,52 @@ public sealed class CurrencyCandidateSource
                 seed.Z,
                 seed.AetheryteId,
                 seed.LifestreamCommand,
-                SpendableItemKind.Sellable,
-                true,
+                marketable ? SpendableItemKind.Sellable : SpendableItemKind.Other,
+                marketable,
                 false));
         }
 
-        return new CandidateBatch(candidates, invalid, unmarketable);
+        return new CandidateBatch(currencies, candidates, invalid, unmarketable);
+    }
+
+    private TrackedCurrencyModel? BuildCurrencyModel(
+        Lumina.Excel.ExcelSheet<Item> itemSheet,
+        uint currencyId,
+        string? currencyName,
+        uint iconId,
+        uint? maxAmount,
+        string source)
+    {
+        var name = currencyName ?? string.Empty;
+        var icon = iconId;
+        if (currencyId != 0)
+        {
+            var currencyItem = itemSheet.GetRow(currencyId);
+            if (currencyItem.RowId == currencyId)
+            {
+                if (string.IsNullOrWhiteSpace(name))
+                {
+                    name = currencyItem.Name.ExtractText();
+                }
+
+                if (icon == 0)
+                {
+                    icon = currencyItem.Icon;
+                }
+            }
+        }
+
+        if (currencyId == 0 && string.IsNullOrWhiteSpace(name))
+        {
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            name = $"Currency {currencyId}";
+        }
+
+        return new TrackedCurrencyModel(currencyId, name, icon, null, maxAmount, true, source);
     }
 
     private static bool IsMarketable(Item item) => !item.IsUntradable && item.ItemSearchCategory.RowId > 0;
@@ -375,6 +458,7 @@ public sealed class CurrencyCandidateSource
     }
 
     private sealed record CandidateBatch(
+        IReadOnlyList<TrackedCurrencyModel> Currencies,
         IReadOnlyList<SpendableCurrencyItem> Candidates,
         int InvalidCount,
         int UnmarketableCount);
