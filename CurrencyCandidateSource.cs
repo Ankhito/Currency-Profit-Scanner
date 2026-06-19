@@ -45,12 +45,12 @@ public sealed class CurrencyCandidateSource
         var itemSheet = this.dataManager.GetExcelSheet<Item>();
         if (itemSheet is null)
         {
-            return new CandidateCatalogLoadResult([], [], new CandidateSourceStatus(
+            return new CandidateCatalogLoadResult(LoadFallbackCurrencies(), [], new CandidateSourceStatus(
                 LuminaAvailable: this.dataManager is not null,
                 LuminaItemSheetAvailable: false,
                 MarketabilityPath: "Item.ItemSearchCategory.RowId > 0 and Item.IsUntradable == false",
-                CandidateSourceType: "Lumina SpecialShop + standalone JSON currencies + validated JSON seed",
-                CandidateLoadStatus: "Item sheet unavailable.",
+                CandidateSourceType: "Built-in currency catalog fallback",
+                CandidateLoadStatus: "Lumina Item sheet unavailable. Showing built-in currency categories only.",
                 CandidateCount: 0,
                 CandidateInvalidCount: 0,
                 CandidateUnmarketableCount: 0,
@@ -125,19 +125,22 @@ public sealed class CurrencyCandidateSource
             }
         }
 
-        var currencyList = dedupedCurrencies.Values
-            .OrderBy(currency => currency.Name, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        var usedFallbackCurrencies = dedupedCurrencies.Count == 0;
+        var currencyList = usedFallbackCurrencies
+            ? LoadFallbackCurrencies().ToList()
+            : dedupedCurrencies.Values.OrderBy(currency => currency.Name, StringComparer.OrdinalIgnoreCase).ToList();
 
-        var statusText = currencyList.Count == 0
-            ? "No currencies loaded. Add seed currencies or verify Lumina shop extraction."
+        var statusText = usedFallbackCurrencies
+            ? "Showing built-in currency categories. No Lumina/seed spendable rows were loaded yet."
             : $"Loaded {currencyList.Count} currenc{(currencyList.Count == 1 ? "y" : "ies")} and {dedupedItems.Count} spendable item(s).";
 
         var status = new CandidateSourceStatus(
             LuminaAvailable: true,
             LuminaItemSheetAvailable: true,
             MarketabilityPath: "Item.ItemSearchCategory.RowId > 0 and Item.IsUntradable == false",
-            CandidateSourceType: "Lumina SpecialShop + standalone JSON currencies + validated JSON seed",
+            CandidateSourceType: usedFallbackCurrencies
+                ? "Built-in currency catalog fallback + Lumina/JSON item enrichment"
+                : "Lumina SpecialShop + standalone JSON currencies + validated JSON seed",
             CandidateLoadStatus: statusText,
             CandidateCount: dedupedItems.Count,
             CandidateInvalidCount: invalid,
@@ -171,76 +174,81 @@ public sealed class CurrencyCandidateSource
             var shopName = shop.Name.ExtractText();
             foreach (var entry in shop.Item)
             {
-                if (entry.ReceiveItems.Count != 1 || entry.ItemCosts.Count != 1)
+                var pairCount = Math.Min(entry.ReceiveItems.Count, entry.ItemCosts.Count);
+                for (var i = 0; i < pairCount; i++)
                 {
-                    invalid++;
-                    continue;
+                    var received = entry.ReceiveItems[i];
+                    var cost = entry.ItemCosts[i];
+                    var itemId = received.Item.RowId;
+                    var costItemId = cost.ItemCost.RowId;
+
+                    // SpecialShop contains many empty padded slots. Skip these silently; they are not invalid data.
+                    if (itemId == 0 && costItemId == 0 && cost.CurrencyCost == 0 && received.ReceiveCount == 0)
+                    {
+                        continue;
+                    }
+
+                    if (itemId == 0 || costItemId == 0 || cost.CurrencyCost == 0 || received.ReceiveCount == 0)
+                    {
+                        continue;
+                    }
+
+                    var item = itemSheet.GetRow(itemId);
+                    var costItem = itemSheet.GetRow(costItemId);
+                    if (item.RowId != itemId || costItem.RowId != costItemId)
+                    {
+                        invalid++;
+                        continue;
+                    }
+
+                    var currencyName = costItem.Name.ExtractText();
+                    if (string.IsNullOrWhiteSpace(currencyName))
+                    {
+                        currencyName = $"Currency {costItemId}";
+                    }
+
+                    var sourceShopName = string.IsNullOrWhiteSpace(shopName) ? $"SpecialShop {shop.RowId}" : shopName;
+                    currencies.Add(new TrackedCurrencyModel(
+                        costItemId,
+                        currencyName,
+                        costItem.Icon,
+                        null,
+                        null,
+                        true,
+                        sourceShopName));
+
+                    var marketable = IsMarketable(item);
+                    if (!marketable)
+                    {
+                        unmarketable++;
+                    }
+
+                    candidates.Add(new SpendableCurrencyItem(
+                        itemId,
+                        item.Name.ExtractText(),
+                        item.Icon,
+                        costItemId,
+                        currencyName,
+                        costItem.Icon,
+                        cost.CurrencyCost,
+                        received.ReceiveCount,
+                        null,
+                        sourceShopName,
+                        null,
+                        marketable
+                            ? $"Lumina SpecialShop row {shop.RowId}; receive/cost index {i}."
+                            : $"Lumina SpecialShop row {shop.RowId}; non-marketable reward at receive/cost index {i}.",
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        marketable ? SpendableItemKind.Sellable : SpendableItemKind.Other,
+                        marketable,
+                        false));
                 }
-
-                var received = entry.ReceiveItems[0];
-                var cost = entry.ItemCosts[0];
-                var itemId = received.Item.RowId;
-                var costItemId = cost.ItemCost.RowId;
-                if (itemId == 0 || cost.CurrencyCost == 0 || received.ReceiveCount == 0 || costItemId == 0)
-                {
-                    invalid++;
-                    continue;
-                }
-
-                var item = itemSheet.GetRow(itemId);
-                var costItem = itemSheet.GetRow(costItemId);
-                if (item.RowId != itemId || costItem.RowId != costItemId)
-                {
-                    invalid++;
-                    continue;
-                }
-
-                var currencyName = costItem.Name.ExtractText();
-                if (string.IsNullOrWhiteSpace(currencyName))
-                {
-                    currencyName = $"Currency {costItemId}";
-                }
-
-                currencies.Add(new TrackedCurrencyModel(
-                    costItemId,
-                    currencyName,
-                    costItem.Icon,
-                    null,
-                    null,
-                    true,
-                    string.IsNullOrWhiteSpace(shopName) ? $"SpecialShop {shop.RowId}" : shopName));
-
-                var marketable = IsMarketable(item);
-                if (!marketable)
-                {
-                    unmarketable++;
-                }
-
-                candidates.Add(new SpendableCurrencyItem(
-                    itemId,
-                    item.Name.ExtractText(),
-                    item.Icon,
-                    costItemId,
-                    currencyName,
-                    costItem.Icon,
-                    cost.CurrencyCost,
-                    received.ReceiveCount,
-                    null,
-                    string.IsNullOrWhiteSpace(shopName) ? $"SpecialShop {shop.RowId}" : shopName,
-                    null,
-                    marketable
-                        ? $"Lumina SpecialShop row {shop.RowId}; single receive and single cost."
-                        : $"Lumina SpecialShop row {shop.RowId}; non-marketable reward.",
-                    null,
-                    null,
-                    null,
-                    null,
-                    null,
-                    null,
-                    null,
-                    marketable ? SpendableItemKind.Sellable : SpendableItemKind.Other,
-                    marketable,
-                    false));
             }
         }
 
@@ -395,6 +403,20 @@ public sealed class CurrencyCandidateSource
 
         return new TrackedCurrencyModel(currencyId, name, icon, null, maxAmount, true, source);
     }
+
+    private static IReadOnlyList<TrackedCurrencyModel> LoadFallbackCurrencies() =>
+    [
+        new TrackedCurrencyModel(0, "Allagan Tomestones", 0, null, null, true, "Built-in category"),
+        new TrackedCurrencyModel(0, "Crafter Scrips", 0, null, null, true, "Built-in category"),
+        new TrackedCurrencyModel(0, "Gatherer Scrips", 0, null, null, true, "Built-in category"),
+        new TrackedCurrencyModel(0, "Bicolor Gemstones", 0, null, null, true, "Built-in category"),
+        new TrackedCurrencyModel(0, "Grand Company Seals", 0, null, null, true, "Built-in category"),
+        new TrackedCurrencyModel(0, "Allied / Centurio / Sacks of Nuts", 0, null, null, true, "Built-in category"),
+        new TrackedCurrencyModel(0, "Wolf Marks", 0, null, null, true, "Built-in category"),
+        new TrackedCurrencyModel(0, "MGP", 0, null, null, true, "Built-in category"),
+        new TrackedCurrencyModel(0, "Tribe Currencies", 0, null, null, true, "Built-in category"),
+        new TrackedCurrencyModel(0, "Cosmic Exploration Currencies", 0, null, null, true, "Built-in category"),
+    ];
 
     private static bool IsMarketable(Item item) => !item.IsUntradable && item.ItemSearchCategory.RowId > 0;
 
