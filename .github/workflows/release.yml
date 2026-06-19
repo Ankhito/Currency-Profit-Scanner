@@ -1,12 +1,20 @@
 name: Release
 
 on:
+  workflow_dispatch:
   push:
     tags:
       - "v*"
+    branches:
+      - main
+    paths:
+      - .github/workflows/release.yml
 
 permissions:
   contents: write
+
+env:
+  MANUAL_RELEASE_TAG: v0.1.3
 
 jobs:
   build-release:
@@ -20,6 +28,16 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
+
+      - name: Resolve release tag
+        id: release
+        shell: pwsh
+        run: |
+          if ("${{ github.ref_type }}" -eq "tag") {
+            "tag=${{ github.ref_name }}" >> $env:GITHUB_OUTPUT
+          } else {
+            "tag=$env:MANUAL_RELEASE_TAG" >> $env:GITHUB_OUTPUT
+          }
 
       - name: Restore
         run: dotnet restore CurrencyProfitScanner.csproj
@@ -56,8 +74,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ steps.package.outputs.zip }}
-          name: Currency Profit Scanner ${{ github.ref_name }}
-          tag_name: ${{ github.ref_name }}
+          name: Currency Profit Scanner ${{ steps.release.outputs.tag }}
+          tag_name: ${{ steps.release.outputs.tag }}
           target_commitish: ${{ github.sha }}
           overwrite_files: true
           make_latest: true
