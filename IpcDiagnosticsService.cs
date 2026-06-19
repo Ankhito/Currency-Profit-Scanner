@@ -7,15 +7,16 @@ namespace CurrencyProfitScanner;
  * DalamudPluginInterface, Allagan, Inventory, Market, Universalis, Currency,
  * and Retainer.
  *
- * No exact provider/subscriber names or typed call-gate signatures were found
- * in this repo. No IPC integrations are registered or used by this MVP.
- * Do not add IPC here without proving the exact provider/subscriber name,
+ * The initial scanner did not use IPC. Navigation IPC was later added only
+ * after exact local source contracts were found in Huntsman/PositionalPilot
+ * wrappers for Lifestream and vnavmesh.
+ * Do not add more IPC here without proving the exact provider/subscriber name,
  * generic type signature, argument meaning, return type, error behavior, and
  * dependency source from local source or documentation.
  */
 public sealed class IpcDiagnosticsService
 {
-    public string Status => "No verified IPC integrations used.";
+    public string Status => "Verified navigation IPC only; no buying/listing/repricing IPC.";
 
-    public string ContractsFound => "None verified in local repo/docs.";
+    public string ContractsFound => "Lifestream and vnavmesh navigation contracts verified from local wrapper source.";
 }

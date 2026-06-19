@@ -8,6 +8,7 @@ public sealed class ScannerWindow : IDisposable
     private readonly ProfitScannerService scannerService;
     private readonly UniversalisClient universalisClient;
     private readonly IpcDiagnosticsService ipcDiagnosticsService;
+    private readonly NavigationIpcService navigationIpcService;
     private readonly LuminaDiscoveryService luminaDiscoveryService;
     private IReadOnlyList<LuminaSheetDiscovery>? luminaDiscovery;
     private bool detailOpen;
@@ -17,12 +18,14 @@ public sealed class ScannerWindow : IDisposable
         ProfitScannerService scannerService,
         UniversalisClient universalisClient,
         IpcDiagnosticsService ipcDiagnosticsService,
+        NavigationIpcService navigationIpcService,
         LuminaDiscoveryService luminaDiscoveryService)
     {
         this.configuration = configuration;
         this.scannerService = scannerService;
         this.universalisClient = universalisClient;
         this.ipcDiagnosticsService = ipcDiagnosticsService;
+        this.navigationIpcService = navigationIpcService;
         this.luminaDiscoveryService = luminaDiscoveryService;
     }
 
@@ -60,6 +63,17 @@ public sealed class ScannerWindow : IDisposable
         if (this.scannerService.Currencies.Count == 0)
         {
             ImGui.TextWrapped($"No verified currency candidates loaded. Add manually verified rows to currency-candidates.json in the plugin config directory, then click Reload Candidates.");
+            if (ImGui.Button("Create seed template"))
+            {
+                this.CreateSeedTemplate();
+            }
+
+            ImGui.SameLine();
+            if (ImGui.Button("Open config folder"))
+            {
+                this.OpenConfigFolder();
+            }
+
             this.DrawDiagnostics();
             ImGui.End();
             return;
@@ -257,6 +271,9 @@ public sealed class ScannerWindow : IDisposable
             {
                 ImGui.SetClipboardText(item.ItemId.ToString());
             }
+
+            ImGui.SameLine();
+            this.DrawNavigationButtons(item);
         }
 
         ImGui.EndTable();
@@ -317,6 +334,10 @@ public sealed class ScannerWindow : IDisposable
         ImGui.Separator();
         ImGui.TextUnformatted("IPC: No IPC required: Lumina uses IDataManager; Universalis uses HTTP.");
         ImGui.TextUnformatted($"IPC contracts: {this.ipcDiagnosticsService.ContractsFound}");
+        ImGui.TextUnformatted($"Lifestream: {this.navigationIpcService.LifestreamStatus}");
+        ImGui.TextUnformatted($"vnavmesh: {this.navigationIpcService.VnavmeshStatus}");
+        ImGui.TextWrapped($"Navigation contracts: {this.navigationIpcService.ContractsUsed}");
+        ImGui.TextUnformatted($"Navigation last error: {this.navigationIpcService.LastNavigationError ?? "none"}");
 
         ImGui.Separator();
         if (ImGui.Button("Run Lumina discovery"))
@@ -340,6 +361,135 @@ public sealed class ScannerWindow : IDisposable
     }
 
     private static string FormatGil(double? value) => value is null ? "Unknown" : value.Value.ToString("N2");
+
+    private void DrawNavigationButtons(SpendableCurrencyItem item)
+    {
+        var canTeleport = this.navigationIpcService.IsLifestreamAvailable && !string.IsNullOrWhiteSpace(item.LifestreamCommand);
+        if (!canTeleport)
+        {
+            ImGui.BeginDisabled();
+        }
+
+        if (ImGui.Button($"Teleport##tp-{item.ItemId}-{item.Cost}"))
+        {
+            _ = Task.Run(() => this.navigationIpcService.Teleport(item.LifestreamCommand ?? string.Empty));
+        }
+
+        if (!canTeleport)
+        {
+            ImGui.EndDisabled();
+            if (ImGui.IsItemHovered())
+            {
+                ImGui.SetTooltip(string.IsNullOrWhiteSpace(item.LifestreamCommand)
+                    ? "No verified Lifestream command target is attached to this row."
+                    : this.navigationIpcService.LifestreamStatus);
+            }
+        }
+
+        ImGui.SameLine();
+        var canPath = this.navigationIpcService.IsVnavmeshAvailable && item.X.HasValue && item.Y.HasValue && item.Z.HasValue;
+        if (!canPath)
+        {
+            ImGui.BeginDisabled();
+        }
+
+        if (ImGui.Button($"Path##path-{item.ItemId}-{item.Cost}"))
+        {
+            _ = Task.Run(() => this.navigationIpcService.PathTo(item.X ?? 0, item.Y ?? 0, item.Z ?? 0));
+        }
+
+        if (!canPath)
+        {
+            ImGui.EndDisabled();
+            if (ImGui.IsItemHovered())
+            {
+                ImGui.SetTooltip(item.X.HasValue && item.Y.HasValue && item.Z.HasValue
+                    ? this.navigationIpcService.VnavmeshStatus
+                    : "No verified vendor coordinates are attached to this row.");
+            }
+        }
+
+        ImGui.SameLine();
+        if (!this.navigationIpcService.CanStopPathing)
+        {
+            ImGui.BeginDisabled();
+        }
+
+        if (ImGui.Button($"Stop##stop-{item.ItemId}-{item.Cost}"))
+        {
+            this.navigationIpcService.StopPathing();
+        }
+
+        if (!this.navigationIpcService.CanStopPathing)
+        {
+            ImGui.EndDisabled();
+            if (ImGui.IsItemHovered())
+            {
+                ImGui.SetTooltip("vnavmesh.Path.Stop provider is unavailable.");
+            }
+        }
+    }
+
+    private void CreateSeedTemplate()
+    {
+        var path = Path.Combine(Plugin.PluginInterface.ConfigDirectory.FullName, "currency-candidates.json");
+        if (File.Exists(path))
+        {
+            return;
+        }
+
+        const string template = """
+        {
+          "currencies": [
+            {
+              "currencyId": 0,
+              "currencyName": "",
+              "iconId": 0,
+              "maxAmount": null,
+              "sourceNotes": "Manual verified"
+            }
+          ],
+          "items": [
+            {
+              "currencyId": 0,
+              "currencyName": "",
+              "itemId": 0,
+              "cost": 0,
+              "quantityReceived": 1,
+              "sourceShopName": "",
+              "sourceVendorName": "",
+              "sourceZone": "",
+              "sourceNotes": "",
+              "territoryId": null,
+              "mapId": null,
+              "x": null,
+              "y": null,
+              "z": null,
+              "aetheryteId": null,
+              "lifestreamCommand": null,
+              "verificationSource": ""
+            }
+          ]
+        }
+        """;
+        File.WriteAllText(path, template);
+    }
+
+    private void OpenConfigFolder()
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = Plugin.PluginInterface.ConfigDirectory.FullName,
+                UseShellExecute = true,
+            });
+        }
+        catch
+        {
+            // Best-effort convenience action only.
+        }
+    }
 
     private static string YesNo(bool value) => value ? "yes" : "no";
 

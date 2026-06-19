@@ -32,6 +32,13 @@ public sealed record SpendableCurrencyItem(
     string? SourceVendorName,
     string? SourceZone,
     string? SourceNotes,
+    uint? TerritoryId,
+    uint? MapId,
+    float? X,
+    float? Y,
+    float? Z,
+    uint? AetheryteId,
+    string? LifestreamCommand,
     SpendableItemKind ItemKind,
     bool IsMarketable,
     bool Disabled);

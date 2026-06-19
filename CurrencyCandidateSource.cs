@@ -57,9 +57,17 @@ public sealed class CurrencyCandidateSource
                 CandidateLastError: "Lumina Item sheet unavailable."));
         }
 
-        // Broad Lumina shop extraction remains intentionally disabled here. SpecialShop
-        // has useful nested properties, but currency conversion and row pairing are not
-        // universally proven without a larger generated data pass.
+        try
+        {
+            var specialShopResult = this.LoadSpecialShopCandidates(itemSheet);
+            items.AddRange(specialShopResult.Candidates);
+            invalid += specialShopResult.InvalidCount;
+            unmarketable += specialShopResult.UnmarketableCount;
+        }
+        catch (Exception ex)
+        {
+            lastError = $"SpecialShop load failed: {ex.Message}";
+        }
 
         try
         {
@@ -104,7 +112,7 @@ public sealed class CurrencyCandidateSource
             LuminaAvailable: true,
             LuminaItemSheetAvailable: true,
             MarketabilityPath: "Item.ItemSearchCategory.RowId > 0 and Item.IsUntradable == false",
-            CandidateSourceType: "Validated JSON seed; Lumina item enrichment",
+            CandidateSourceType: "Lumina SpecialShop single cost/reward + validated JSON seed",
             CandidateLoadStatus: statusText,
             CandidateCount: deduped.Count,
             CandidateInvalidCount: invalid,
@@ -180,6 +188,13 @@ public sealed class CurrencyCandidateSource
                     string.IsNullOrWhiteSpace(shopName) ? $"SpecialShop {shop.RowId}" : shopName,
                     null,
                     $"Lumina SpecialShop row {shop.RowId}; single receive and single cost only.",
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
                     SpendableItemKind.Sellable,
                     true,
                     false));
@@ -200,11 +215,20 @@ public sealed class CurrencyCandidateSource
             return new CandidateBatch(candidates, invalid, unmarketable);
         }
 
-        List<SeedCandidate>? seeds;
+        SeedCatalog? catalog = null;
+        List<SeedCandidate>? legacySeeds = null;
         try
         {
             var json = File.ReadAllText(seedPath);
-            seeds = JsonSerializer.Deserialize<List<SeedCandidate>>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            if (json.TrimStart().StartsWith("[", StringComparison.Ordinal))
+            {
+                legacySeeds = JsonSerializer.Deserialize<List<SeedCandidate>>(json, options);
+            }
+            else
+            {
+                catalog = JsonSerializer.Deserialize<SeedCatalog>(json, options);
+            }
         }
         catch
         {
@@ -212,6 +236,12 @@ public sealed class CurrencyCandidateSource
             return new CandidateBatch(candidates, invalid, unmarketable);
         }
 
+        var currencyMap = (catalog?.Currencies ?? [])
+            .Where(currency => currency.CurrencyId != 0 || !string.IsNullOrWhiteSpace(currency.CurrencyName))
+            .GroupBy(currency => currency.CurrencyId)
+            .ToDictionary(group => group.Key, group => group.First());
+
+        var seeds = legacySeeds ?? catalog?.Items;
         if (seeds is null)
         {
             return new CandidateBatch(candidates, invalid, unmarketable);
@@ -219,7 +249,15 @@ public sealed class CurrencyCandidateSource
 
         foreach (var seed in seeds)
         {
-            if (seed.ItemId == 0 || seed.Cost == 0 || seed.QuantityReceived == 0 || string.IsNullOrWhiteSpace(seed.CurrencyName))
+            var currencyName = seed.CurrencyName;
+            var currencyIcon = 0u;
+            if (seed.CurrencyId != 0 && currencyMap.TryGetValue(seed.CurrencyId, out var seedCurrency))
+            {
+                currencyName = string.IsNullOrWhiteSpace(currencyName) ? seedCurrency.CurrencyName : currencyName;
+                currencyIcon = seedCurrency.IconId;
+            }
+
+            if (seed.ItemId == 0 || seed.Cost == 0 || seed.QuantityReceived == 0 || string.IsNullOrWhiteSpace(currencyName))
             {
                 invalid++;
                 continue;
@@ -238,8 +276,7 @@ public sealed class CurrencyCandidateSource
                 continue;
             }
 
-            var currencyIcon = 0u;
-            if (seed.CurrencyId != 0)
+            if (currencyIcon == 0 && seed.CurrencyId != 0)
             {
                 var currencyItem = itemSheet.GetRow(seed.CurrencyId);
                 if (currencyItem.RowId == seed.CurrencyId)
@@ -253,14 +290,21 @@ public sealed class CurrencyCandidateSource
                 item.Name.ExtractText(),
                 item.Icon,
                 seed.CurrencyId,
-                seed.CurrencyName,
+                currencyName,
                 currencyIcon,
                 seed.Cost,
                 seed.QuantityReceived,
                 seed.SourceVendorName,
                 seed.SourceShopName,
                 seed.SourceZone,
-                seed.VerificationSource,
+                seed.SourceNotes ?? seed.VerificationSource,
+                seed.TerritoryId,
+                seed.MapId,
+                seed.X,
+                seed.Y,
+                seed.Z,
+                seed.AetheryteId,
+                seed.LifestreamCommand,
                 SpendableItemKind.Sellable,
                 true,
                 false));
@@ -291,7 +335,43 @@ public sealed class CurrencyCandidateSource
 
         public string? SourceZone { get; set; }
 
+        public string? SourceNotes { get; set; }
+
+        public uint? TerritoryId { get; set; }
+
+        public uint? MapId { get; set; }
+
+        public float? X { get; set; }
+
+        public float? Y { get; set; }
+
+        public float? Z { get; set; }
+
+        public uint? AetheryteId { get; set; }
+
+        public string? LifestreamCommand { get; set; }
+
         public string? VerificationSource { get; set; }
+    }
+
+    private sealed class SeedCurrency
+    {
+        public uint CurrencyId { get; set; }
+
+        public string CurrencyName { get; set; } = string.Empty;
+
+        public uint IconId { get; set; }
+
+        public uint? MaxAmount { get; set; }
+
+        public string? SourceNotes { get; set; }
+    }
+
+    private sealed class SeedCatalog
+    {
+        public List<SeedCurrency> Currencies { get; set; } = [];
+
+        public List<SeedCandidate> Items { get; set; } = [];
     }
 
     private sealed record CandidateBatch(
