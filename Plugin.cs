@@ -28,7 +28,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly IpcDiagnosticsService ipcDiagnosticsService;
     private readonly NavigationIpcService navigationIpcService;
     private readonly LuminaDiscoveryService luminaDiscoveryService;
-    private readonly ScannerWindow scannerWindow;
+    private readonly CurrencyFirstWindow scannerWindow;
 
     public Plugin()
     {
@@ -41,7 +41,7 @@ public sealed class Plugin : IDalamudPlugin
         this.ipcDiagnosticsService = new IpcDiagnosticsService();
         this.navigationIpcService = new NavigationIpcService(PluginInterface, Log);
         this.luminaDiscoveryService = new LuminaDiscoveryService(DataManager);
-        this.scannerWindow = new ScannerWindow(this.configuration, this.scannerService, this.universalisClient, this.ipcDiagnosticsService, this.navigationIpcService, this.luminaDiscoveryService);
+        this.scannerWindow = new CurrencyFirstWindow(this.configuration, this.scannerService, this.universalisClient, this.ipcDiagnosticsService, this.navigationIpcService);
 
         PluginInterface.UiBuilder.Draw += this.DrawUi;
         PluginInterface.UiBuilder.OpenConfigUi += this.OpenConfigUi;
