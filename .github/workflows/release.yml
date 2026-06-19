@@ -8,9 +8,6 @@ on:
 permissions:
   contents: write
 
-env:
-  ANKHITOPLUGINS_DISPATCH_TOKEN: ${{ secrets.ANKHITOPLUGINS_DISPATCH_TOKEN || secrets.SEKHMETPLUGINS_DISPATCH_TOKEN }}
-
 jobs:
   build-release:
     runs-on: windows-latest
@@ -46,6 +43,9 @@ jobs:
             Where-Object { $_.FullName -match '[\\/]CurrencyProfitScanner[\\/]latest\.zip$' } |
             Select-Object -First 1
           if (-not $zip) {
+            $zip = Get-ChildItem -Path bin/Release -Recurse -Filter latest.zip | Select-Object -First 1
+          }
+          if (-not $zip) {
             throw "DalamudPackager did not produce latest.zip"
           }
           $asset = Join-Path $env:RUNNER_TEMP "CurrencyProfitScanner-latest.zip"
@@ -61,19 +61,3 @@ jobs:
           target_commitish: ${{ github.sha }}
           overwrite_files: true
           make_latest: true
-
-      - name: Dispatch pluginmaster update
-        if: ${{ env.ANKHITOPLUGINS_DISPATCH_TOKEN != '' }}
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ env.ANKHITOPLUGINS_DISPATCH_TOKEN }}
-        run: |
-          $payload = @{
-            event_type = "update-pluginmaster"
-            client_payload = @{
-              repository = "${{ github.repository }}"
-              tag = "${{ github.ref_name }}"
-            }
-          } | ConvertTo-Json -Compress
-
-          $payload | gh api repos/Ankhito/AnkhitoPlugins/dispatches --method POST --input -
