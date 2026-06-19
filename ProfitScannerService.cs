@@ -8,6 +8,7 @@ public sealed class ProfitScannerService : IDisposable
     private readonly UniversalisClient universalisClient;
     private readonly PluginConfiguration configuration;
     private readonly IPluginLog log;
+    private readonly Dictionary<string, IReadOnlyList<ProfitResult>> resultsByCurrency = new(StringComparer.Ordinal);
     private CancellationTokenSource? refreshCts;
 
     public ProfitScannerService(
@@ -57,25 +58,40 @@ public sealed class ProfitScannerService : IDisposable
         this.Currencies = catalog.Currencies;
         this.Items = catalog.Items;
         this.CandidateSourceStatus = catalog.Status;
+        this.resultsByCurrency.Clear();
+        this.Results = [];
 
-        if (this.SelectedCurrency is not null && this.Currencies.All(currency => !SameCurrency(currency, this.SelectedCurrency)))
+        if (this.SelectedCurrency is not null)
         {
-            this.SelectedCurrency = null;
-            this.Results = [];
+            this.SelectedCurrency = this.Currencies.FirstOrDefault(currency => SameCurrency(currency, this.SelectedCurrency));
         }
 
         this.Status = catalog.Status.CandidateLoadStatus;
+        this.RankingStatus = new RankingStatus("Candidate data reloaded. Select a currency and refresh market data.", null, 0, 0, 0, 0);
     }
 
     public void SelectCurrency(TrackedCurrencyModel currency)
     {
         this.SelectedCurrency = currency;
-        this.Results = [];
-        this.RankingStatus = new RankingStatus("Currency selected. Refresh market data to rank items.", null, 0, 0, 0, 0);
+        this.Results = this.GetResultsForCurrency(currency);
+        this.RankingStatus = this.Results.Count == 0
+            ? new RankingStatus("Currency selected. Refresh market data to rank sellable items.", null, 0, 0, 0, 0)
+            : BuildRankingStatus("Loaded cached rankings for selected currency.", this.Results);
         this.Status = this.RankingStatus.Status;
     }
 
-    public IReadOnlyList<SpendableCurrencyItem> GetItemsForCurrency(TrackedCurrencyModel currency)
+    public IReadOnlyList<SpendableCurrencyItem> GetAllItemsForCurrency(TrackedCurrencyModel currency)
+    {
+        return this.Items
+            .Where(item => SameCurrency(item, currency) && !item.Disabled)
+            .OrderBy(item => item.IsMarketable ? 0 : 1)
+            .ThenBy(item => item.ItemName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    public IReadOnlyList<SpendableCurrencyItem> GetItemsForCurrency(TrackedCurrencyModel currency) => this.GetSellableItemsForCurrency(currency);
+
+    public IReadOnlyList<SpendableCurrencyItem> GetSellableItemsForCurrency(TrackedCurrencyModel currency)
     {
         return this.Items
             .Where(item => SameCurrency(item, currency) && item.IsMarketable && !item.Disabled)
@@ -83,10 +99,23 @@ public sealed class ProfitScannerService : IDisposable
             .ToList();
     }
 
+    public IReadOnlyList<SpendableCurrencyItem> GetOtherItemsForCurrency(TrackedCurrencyModel currency)
+    {
+        return this.Items
+            .Where(item => SameCurrency(item, currency) && !item.IsMarketable && !item.Disabled)
+            .OrderBy(item => item.ItemName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    public IReadOnlyList<ProfitResult> GetResultsForCurrency(TrackedCurrencyModel currency)
+    {
+        return this.resultsByCurrency.TryGetValue(CurrencyKey(currency), out var results) ? results : [];
+    }
+
     public double? GetBestGilPerCurrency(TrackedCurrencyModel currency)
     {
-        return this.Results
-            .Where(result => SameCurrency(result.Item, currency) && result.Market.Sales24h > 0)
+        return this.GetResultsForCurrency(currency)
+            .Where(result => result.Market.Sales24h > 0)
             .Select(result => result.GilPerCurrency)
             .Where(value => value.HasValue)
             .DefaultIfEmpty()
@@ -95,8 +124,8 @@ public sealed class ProfitScannerService : IDisposable
 
     public string? GetBestItemName(TrackedCurrencyModel currency)
     {
-        return this.Results
-            .Where(result => SameCurrency(result.Item, currency) && result.Market.Sales24h > 0)
+        return this.GetResultsForCurrency(currency)
+            .Where(result => result.Market.Sales24h > 0)
             .OrderByDescending(result => MovementTier(result))
             .ThenByDescending(result => result.Market.Sales24h)
             .ThenByDescending(result => result.Market.UnitsSold24h)
@@ -122,10 +151,12 @@ public sealed class ProfitScannerService : IDisposable
 
         try
         {
-            var candidates = this.GetItemsForCurrency(this.SelectedCurrency);
+            var selected = this.SelectedCurrency;
+            var candidates = this.GetSellableItemsForCurrency(selected);
             if (candidates.Count == 0)
             {
                 this.Results = [];
+                this.resultsByCurrency.Remove(CurrencyKey(selected));
                 this.Status = "Selected currency has no verified marketable candidates.";
                 this.RankingStatus = new RankingStatus(this.Status, null, 0, 0, 0, 0);
                 return;
@@ -137,7 +168,7 @@ public sealed class ProfitScannerService : IDisposable
                 TimeSpan.FromMinutes(Math.Clamp(this.configuration.CacheTtlMinutes, 1, 120)),
                 token).ConfigureAwait(false);
 
-            this.Results = candidates
+            var results = candidates
                 .Select(item => Calculate(item, marketData.GetValueOrDefault(item.ItemId), this.configuration))
                 .OrderByDescending(MovementTier)
                 .ThenByDescending(result => result.Market.Sales24h)
@@ -145,16 +176,17 @@ public sealed class ProfitScannerService : IDisposable
                 .ThenByDescending(result => result.GilPerCurrency ?? 0)
                 .ToList();
 
+            this.Results = results;
+            this.resultsByCurrency[CurrencyKey(selected)] = results;
+
             this.LastRefreshUtc = DateTimeOffset.UtcNow;
-            var zeroSaleCount = this.Results.Count(result => result.Market.Sales24h == 0);
-            var speculativeCount = this.Results.Count(result => result.Confidence == "Speculative");
-            var staleCount = this.Results.Count(result => result.Confidence == "Stale");
-            this.Status = this.Results.Count == 0
+            var zeroSaleCount = results.Count(result => result.Market.Sales24h == 0);
+            this.Status = results.Count == 0
                 ? "Candidates loaded, but no rankings produced."
-                : zeroSaleCount == this.Results.Count
+                : zeroSaleCount == results.Count
                     ? "Candidates loaded, but no 24h sales found."
                     : "Candidates loaded, market data fetched, rankings produced.";
-            this.RankingStatus = new RankingStatus(this.Status, null, this.Results.Count, zeroSaleCount, speculativeCount, staleCount);
+            this.RankingStatus = BuildRankingStatus(this.Status, results);
         }
         catch (OperationCanceledException)
         {
@@ -238,6 +270,19 @@ public sealed class ProfitScannerService : IDisposable
         var snapshot = new MarketSnapshot(item.ItemId, null, 0, 0, null, null, null, null, null, null, null, status);
         return new ProfitResult(item, snapshot, null, null, 0, 0, "Unknown");
     }
+
+    private static RankingStatus BuildRankingStatus(string status, IReadOnlyList<ProfitResult> results)
+    {
+        return new RankingStatus(
+            status,
+            null,
+            results.Count,
+            results.Count(result => result.Market.Sales24h == 0),
+            results.Count(result => result.Confidence == "Speculative"),
+            results.Count(result => result.Confidence == "Stale"));
+    }
+
+    private static string CurrencyKey(TrackedCurrencyModel currency) => $"{currency.CurrencyId}:{currency.Name}";
 
     private static bool SameCurrency(SpendableCurrencyItem item, TrackedCurrencyModel currency) =>
         item.CurrencyId == currency.CurrencyId && item.CurrencyName.Equals(currency.Name, StringComparison.Ordinal);
