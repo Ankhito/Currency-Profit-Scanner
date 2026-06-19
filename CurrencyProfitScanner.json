@@ -1,0 +1,15 @@
+{
+  "Author": "Ankhito",
+  "Name": "Currency Profit Scanner",
+  "InternalName": "CurrencyProfitScanner",
+  "Punchline": "Ranks verified non-gil currency vendor items by recent Universalis sales.",
+  "Description": "Read-only MVP scanner for profitable non-gil currency vendor items. Uses Universalis market data and does not automate game interactions.",
+  "RepoUrl": "https://github.com/Ankhito/Currency-Profit-Scanner",
+  "ApplicableVersion": "any",
+  "DalamudApiLevel": 15,
+  "Tags": [
+    "market",
+    "currency",
+    "universalis"
+  ]
+}
