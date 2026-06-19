@@ -10,6 +10,7 @@ public sealed class ScannerWindow : IDisposable
     private readonly IpcDiagnosticsService ipcDiagnosticsService;
     private readonly LuminaDiscoveryService luminaDiscoveryService;
     private IReadOnlyList<LuminaSheetDiscovery>? luminaDiscovery;
+    private bool detailOpen;
 
     public ScannerWindow(
         PluginConfiguration configuration,
@@ -29,6 +30,16 @@ public sealed class ScannerWindow : IDisposable
 
     public void Draw()
     {
+        this.DrawMainWindow();
+        this.DrawDetailWindow();
+    }
+
+    public void Dispose()
+    {
+    }
+
+    private void DrawMainWindow()
+    {
         if (!this.IsOpen)
         {
             return;
@@ -43,29 +54,25 @@ public sealed class ScannerWindow : IDisposable
         }
 
         this.IsOpen = isOpen;
-
-        this.DrawControls();
+        this.DrawTopControls();
         ImGui.Separator();
-        ImGui.TextUnformatted(this.scannerService.Status);
 
-        if (this.scannerService.Candidates.Count == 0 && this.scannerService.Results.Count == 0)
+        if (this.scannerService.Currencies.Count == 0)
         {
-            ImGui.TextWrapped("No verified candidate data loaded. The scanner framework is ready, but no item IDs, costs, quantities, or currency IDs have been fabricated.");
+            ImGui.TextWrapped($"No verified currency candidates loaded. Add manually verified rows to currency-candidates.json in the plugin config directory, then click Reload Candidates.");
+            this.DrawDiagnostics();
+            ImGui.End();
+            return;
         }
 
+        this.DrawCurrencyTable();
         this.DrawDiagnostics();
-        this.DrawResultsTable();
         ImGui.End();
     }
 
-    public void Dispose()
-    {
-    }
-
-    private void DrawControls()
+    private void DrawTopControls()
     {
         var worldOrDc = this.configuration.PreferredWorldOrDc;
-
         if (ImGui.InputText("World/DC/Region", ref worldOrDc, 64))
         {
             this.configuration.PreferredWorldOrDc = worldOrDc;
@@ -79,42 +86,193 @@ public sealed class ScannerWindow : IDisposable
             this.configuration.Save();
         }
 
-        var hideStale = this.configuration.HideStaleData;
-        if (ImGui.Checkbox("Hide stale data", ref hideStale))
+        if (ImGui.Button("Reload Candidates"))
         {
-            this.configuration.HideStaleData = hideStale;
-            this.configuration.Save();
-        }
-
-        var hideNoMovement = this.configuration.HideNoMovementItems;
-        if (ImGui.Checkbox("Hide no-movement items", ref hideNoMovement))
-        {
-            this.configuration.HideNoMovementItems = hideNoMovement;
-            this.configuration.Save();
-        }
-
-        var currencyFilter = this.configuration.CurrencyFilter;
-        if (ImGui.InputText("Currency filter", ref currencyFilter, 64))
-        {
-            this.configuration.CurrencyFilter = currencyFilter;
-            this.configuration.Save();
-        }
-
-        if (ImGui.Button(this.scannerService.IsRefreshing ? "Running..." : "Run pipeline test") && !this.scannerService.IsRefreshing)
-        {
-            _ = this.scannerService.RefreshAsync(this.configuration.PreferredWorldOrDc);
+            this.scannerService.ReloadCandidates();
         }
 
         ImGui.SameLine();
-        if (ImGui.Button("Refresh market data") && !this.scannerService.IsRefreshing)
+        ImGui.TextUnformatted(this.scannerService.Status);
+    }
+
+    private void DrawCurrencyTable()
+    {
+        const ImGuiTableFlags flags = ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.Resizable | ImGuiTableFlags.Sortable;
+        if (!ImGui.BeginTable("currency-list", 8, flags))
         {
-            _ = this.scannerService.RefreshAsync(this.configuration.PreferredWorldOrDc);
+            return;
+        }
+
+        ImGui.TableSetupColumn("Icon");
+        ImGui.TableSetupColumn("Currency");
+        ImGui.TableSetupColumn("Amount");
+        ImGui.TableSetupColumn("Full");
+        ImGui.TableSetupColumn("Candidates");
+        ImGui.TableSetupColumn("Best gil/currency");
+        ImGui.TableSetupColumn("Best item");
+        ImGui.TableSetupColumn("Action", ImGuiTableColumnFlags.NoSort);
+        ImGui.TableHeadersRow();
+
+        foreach (var currency in this.scannerService.Currencies)
+        {
+            var candidateCount = this.scannerService.GetItemsForCurrency(currency).Count;
+            ImGui.TableNextRow();
+            this.Cell(currency.IconId == 0 ? "-" : $"#{currency.IconId}");
+            this.Cell(currency.Name);
+            this.Cell(currency.CurrentAmount is null ? "Unknown" : $"{currency.CurrentAmount:N0}/{currency.MaxAmount?.ToString("N0") ?? "?"}");
+            this.Cell(currency.CurrentAmount is not null && currency.MaxAmount is > 0
+                ? $"{currency.CurrentAmount.Value * 100d / currency.MaxAmount.Value:N0}%"
+                : "Unknown");
+            this.Cell(candidateCount.ToString("N0"));
+            this.Cell(FormatGil(this.scannerService.GetBestGilPerCurrency(currency)));
+            this.Cell(this.scannerService.GetBestItemName(currency) ?? "Unknown");
+            ImGui.TableNextColumn();
+            if (ImGui.Button($"Analyze##{currency.CurrencyId}-{currency.Name}"))
+            {
+                this.scannerService.SelectCurrency(currency);
+                this.detailOpen = true;
+            }
+        }
+
+        ImGui.EndTable();
+    }
+
+    private void DrawDetailWindow()
+    {
+        if (!this.detailOpen || this.scannerService.SelectedCurrency is not { } currency)
+        {
+            return;
+        }
+
+        var open = this.detailOpen;
+        if (!ImGui.Begin($"Spend {currency.Name}###currency-detail", ref open))
+        {
+            this.detailOpen = open;
+            ImGui.End();
+            return;
+        }
+
+        this.detailOpen = open;
+        this.DrawDetailHeader(currency);
+        ImGui.Separator();
+        this.DrawSellableSection(currency);
+        this.DrawCollectablesSection();
+        this.DrawDiagnostics();
+        ImGui.End();
+    }
+
+    private void DrawDetailHeader(TrackedCurrencyModel currency)
+    {
+        ImGui.TextUnformatted(currency.IconId == 0 ? "[no icon]" : $"Icon #{currency.IconId}");
+        ImGui.SameLine();
+        ImGui.TextUnformatted(currency.Name);
+        ImGui.TextUnformatted($"Amount: {(currency.CurrentAmount is null ? "Unknown" : currency.CurrentAmount.Value.ToString("N0"))} / {(currency.MaxAmount is null ? "Unknown" : currency.MaxAmount.Value.ToString("N0"))}");
+        ImGui.TextUnformatted($"Candidates: {this.scannerService.GetItemsForCurrency(currency).Count:N0}");
+        ImGui.TextUnformatted($"Market status: {this.universalisClient.Status}");
+
+        if (ImGui.Button(this.scannerService.IsRefreshing ? "Refreshing..." : "Refresh Market Data") && !this.scannerService.IsRefreshing)
+        {
+            _ = this.scannerService.RefreshSelectedCurrencyAsync(this.configuration.PreferredWorldOrDc);
         }
 
         if (this.scannerService.LastRefreshUtc is { } lastRefresh)
         {
             ImGui.SameLine();
             ImGui.TextUnformatted($"Last refresh: {(DateTimeOffset.UtcNow - lastRefresh).TotalMinutes:N0}m ago");
+        }
+    }
+
+    private void DrawSellableSection(TrackedCurrencyModel currency)
+    {
+        if (!ImGui.CollapsingHeader("Sellable on Market Board", ImGuiTreeNodeFlags.DefaultOpen))
+        {
+            return;
+        }
+
+        var candidates = this.scannerService.GetItemsForCurrency(currency);
+        if (candidates.Count == 0)
+        {
+            ImGui.TextWrapped("This currency has no verified marketable candidates. Add verified rows to currency-candidates.json.");
+            return;
+        }
+
+        var rows = this.scannerService.Results.Count == 0
+            ? candidates.Select(item => new ProfitResult(
+                item,
+                new MarketSnapshot(item.ItemId, null, 0, 0, null, null, null, null, null, null, null, "Not fetched"),
+                null,
+                null,
+                0,
+                0,
+                "Unknown")).ToList()
+            : this.scannerService.Results;
+
+        const ImGuiTableFlags flags = ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.Resizable | ImGuiTableFlags.Sortable | ImGuiTableFlags.ScrollX;
+        if (!ImGui.BeginTable("currency-sellables", 14, flags))
+        {
+            return;
+        }
+
+        ImGui.TableSetupColumn("Item");
+        ImGui.TableSetupColumn("Sales 24h");
+        ImGui.TableSetupColumn("Units 24h");
+        ImGui.TableSetupColumn("Last sale");
+        ImGui.TableSetupColumn("Cost");
+        ImGui.TableSetupColumn("Qty");
+        ImGui.TableSetupColumn("Can buy");
+        ImGui.TableSetupColumn("Floor");
+        ImGui.TableSetupColumn("Conservative");
+        ImGui.TableSetupColumn("Gil/currency");
+        ImGui.TableSetupColumn("Expected total");
+        ImGui.TableSetupColumn("Confidence");
+        ImGui.TableSetupColumn("Source");
+        ImGui.TableSetupColumn("Actions", ImGuiTableColumnFlags.NoSort);
+        ImGui.TableHeadersRow();
+
+        foreach (var result in rows)
+        {
+            var item = result.Item;
+            ImGui.TableNextRow();
+            this.Cell(item.IconId == 0 ? item.ItemName : $"#{item.IconId} {item.ItemName}");
+            this.Cell(result.Market.Sales24h.ToString("N0"));
+            this.Cell(result.Market.UnitsSold24h.ToString("N0"));
+            this.Cell(result.Market.LastSaleAgeHours is null ? "Unknown" : $"{result.Market.LastSaleAgeHours:N1}h");
+            this.Cell(item.Cost.ToString("N0"));
+            this.Cell(item.QuantityReceived.ToString("N0"));
+            this.Cell(currency.CurrentAmount is null ? "Unknown" : (currency.CurrentAmount.Value / Math.Max(item.Cost, 1)).ToString("N0"));
+            this.Cell(result.Market.CurrentFloor is null ? "Unknown" : result.Market.CurrentFloor.Value.ToString("N0"));
+            this.Cell(FormatGil(result.Market.ConservativeSalePrice));
+            this.Cell(FormatGil(result.GilPerCurrency));
+            this.Cell(FormatGil(result.ExpectedTotal));
+            this.Cell(result.Confidence);
+            this.Cell(SourceText(item));
+            ImGui.TableNextColumn();
+            if (ImGui.Button($"Copy name##name-{item.ItemId}-{item.Cost}"))
+            {
+                ImGui.SetClipboardText(item.ItemName);
+            }
+
+            ImGui.SameLine();
+            if (ImGui.Button($"Copy ID##id-{item.ItemId}-{item.Cost}"))
+            {
+                ImGui.SetClipboardText(item.ItemId.ToString());
+            }
+        }
+
+        ImGui.EndTable();
+    }
+
+    private static string SourceText(SpendableCurrencyItem item)
+    {
+        return string.Join(" / ", new[] { item.SourceShopName, item.SourceVendorName, item.SourceZone, item.SourceNotes }
+            .Where(value => !string.IsNullOrWhiteSpace(value)));
+    }
+
+    private void DrawCollectablesSection()
+    {
+        if (ImGui.CollapsingHeader("Collectables / Unlocks"))
+        {
+            ImGui.TextWrapped("Collectable and unlock tracking is not implemented in this read-only market-profit pass.");
         }
     }
 
@@ -125,51 +283,6 @@ public sealed class ScannerWindow : IDisposable
             return;
         }
 
-        ImGui.TextUnformatted($"Universalis: {this.universalisClient.Status}");
-        ImGui.TextUnformatted($"Candidate data: {this.scannerService.CandidateDataSourceStatus}");
-        ImGui.TextUnformatted("IPC: No IPC required: Lumina uses IDataManager; Universalis uses HTTP.");
-        ImGui.TextUnformatted($"IPC contracts: {this.ipcDiagnosticsService.ContractsFound}");
-        ImGui.Separator();
-        this.DrawPipelineDiagnostics();
-        ImGui.Separator();
-        if (ImGui.Button("Run Lumina discovery"))
-        {
-            this.luminaDiscovery = this.luminaDiscoveryService.Discover();
-        }
-
-        if (this.luminaDiscovery is null)
-        {
-            ImGui.TextUnformatted("Lumina discovery: not run.");
-            return;
-        }
-
-        ImGui.TextUnformatted($"Lumina discovery: {this.luminaDiscovery.Count} compile-visible sheet class(es).");
-        foreach (var sheet in this.luminaDiscovery)
-        {
-            if (!ImGui.TreeNode($"{sheet.SheetClassName} ({(sheet.CanLoadSheet ? "loadable" : "not loadable")})"))
-            {
-                continue;
-            }
-
-            var assessment = sheet.CandidateAssessment;
-            ImGui.TextUnformatted($"Result item: {YesNo(assessment.ResultItem)}");
-            ImGui.TextUnformatted($"Cost item/currency: {YesNo(assessment.CostCurrency)}");
-            ImGui.TextUnformatted($"Cost amount: {YesNo(assessment.CostAmount)}");
-            ImGui.TextUnformatted($"Quantity received: {YesNo(assessment.QuantityReceived)}");
-            ImGui.TextUnformatted($"Source shop name: {YesNo(assessment.SourceShopName)}");
-            ImGui.TextWrapped(assessment.Notes);
-            ImGui.Separator();
-            foreach (var property in sheet.PublicProperties)
-            {
-                ImGui.TextUnformatted(property);
-            }
-
-            ImGui.TreePop();
-        }
-    }
-
-    private void DrawPipelineDiagnostics()
-    {
         var candidate = this.scannerService.CandidateSourceStatus;
         ImGui.TextUnformatted("Lumina");
         ImGui.TextUnformatted($"IDataManager available: {YesNo(candidate.LuminaAvailable)}");
@@ -200,68 +313,24 @@ public sealed class ScannerWindow : IDisposable
         ImGui.TextUnformatted($"Speculative results: {ranking.SpeculativeCount:N0}");
         ImGui.TextUnformatted($"Stale-data results: {ranking.StaleDataCount:N0}");
         ImGui.TextUnformatted($"Ranking last error: {ranking.LastError ?? "none"}");
-    }
 
-    private void DrawResultsTable()
-    {
-        const ImGuiTableFlags flags = ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.Resizable | ImGuiTableFlags.Sortable;
-        if (!ImGui.BeginTable("currency-profit-results", 13, flags))
+        ImGui.Separator();
+        ImGui.TextUnformatted("IPC: No IPC required: Lumina uses IDataManager; Universalis uses HTTP.");
+        ImGui.TextUnformatted($"IPC contracts: {this.ipcDiagnosticsService.ContractsFound}");
+
+        ImGui.Separator();
+        if (ImGui.Button("Run Lumina discovery"))
         {
+            this.luminaDiscovery = this.luminaDiscoveryService.Discover();
+        }
+
+        if (this.luminaDiscovery is null)
+        {
+            ImGui.TextUnformatted("Lumina discovery: not run.");
             return;
         }
 
-        ImGui.TableSetupColumn("Item");
-        ImGui.TableSetupColumn("Currency");
-        ImGui.TableSetupColumn("Cost");
-        ImGui.TableSetupColumn("Qty");
-        ImGui.TableSetupColumn("Expected gil/currency");
-        ImGui.TableSetupColumn("Final score");
-        ImGui.TableSetupColumn("Sales 24h");
-        ImGui.TableSetupColumn("Units sold 24h");
-        ImGui.TableSetupColumn("Last sale");
-        ImGui.TableSetupColumn("Current floor");
-        ImGui.TableSetupColumn("Active supply");
-        ImGui.TableSetupColumn("Confidence");
-        ImGui.TableSetupColumn("Data age / notes");
-        ImGui.TableHeadersRow();
-
-        foreach (var result in this.FilteredResults())
-        {
-            ImGui.TableNextRow();
-            this.Cell(result.Candidate.ItemName);
-            this.Cell(result.Candidate.CurrencyName);
-            this.Cell(result.Candidate.Cost.ToString("N0"));
-            this.Cell(result.Candidate.QuantityReceived.ToString("N0"));
-            this.Cell(FormatGil(result.GilPerCurrency));
-            this.Cell(result.FinalScore.ToString("N2"));
-            this.Cell(result.Sales24h.ToString("N0"));
-            this.Cell(result.UnitsSold24h.ToString("N0"));
-            this.Cell(result.LastSaleAgeHours is null ? "unknown" : $"{result.LastSaleAgeHours:N1}h");
-            this.Cell(result.CurrentFloorPrice is null ? "unknown" : result.CurrentFloorPrice.Value.ToString("N0"));
-            this.Cell(result.ActiveSupply is null ? "unknown" : result.ActiveSupply.Value.ToString("N0"));
-            this.Cell(result.Confidence);
-            this.Cell(this.DataAgeAndNotes(result));
-        }
-
-        ImGui.EndTable();
-    }
-
-    private IEnumerable<ScanResult> FilteredResults()
-    {
-        return this.scannerService.Results.Where(result =>
-            (!this.configuration.HideStaleData || !result.IsStale) &&
-            (!this.configuration.HideNoMovementItems || result.Sales24h > 0) &&
-            (string.IsNullOrWhiteSpace(this.configuration.CurrencyFilter) ||
-             result.Candidate.CurrencyName.Contains(this.configuration.CurrencyFilter, StringComparison.OrdinalIgnoreCase)));
-    }
-
-    private string DataAgeAndNotes(ScanResult result)
-    {
-        var age = result.MarketData?.LastUploadTime is null
-            ? "unknown age"
-            : $"{(DateTimeOffset.UtcNow - result.MarketData.LastUploadTime.Value).TotalMinutes:N0}m old";
-        var notes = string.IsNullOrWhiteSpace(result.Candidate.Notes) ? result.Status : result.Candidate.Notes;
-        return $"{age}; {notes}";
+        ImGui.TextUnformatted($"Lumina discovery: {this.luminaDiscovery.Count} compile-visible sheet class(es).");
     }
 
     private void Cell(string value)
@@ -270,7 +339,7 @@ public sealed class ScannerWindow : IDisposable
         ImGui.TextUnformatted(value);
     }
 
-    private static string FormatGil(double? value) => value is null ? "unknown" : value.Value.ToString("N2");
+    private static string FormatGil(double? value) => value is null ? "Unknown" : value.Value.ToString("N2");
 
     private static string YesNo(bool value) => value ? "yes" : "no";
 

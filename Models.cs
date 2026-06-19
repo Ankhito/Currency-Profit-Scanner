@@ -1,5 +1,69 @@
 namespace CurrencyProfitScanner;
 
+[Flags]
+public enum SpendableItemKind
+{
+    Other = 0,
+    Sellable = 1,
+    Collectable = 2,
+    Venture = 4,
+    Currency = 8,
+}
+
+public sealed record TrackedCurrencyModel(
+    uint CurrencyId,
+    string Name,
+    uint IconId,
+    uint? CurrentAmount,
+    uint? MaxAmount,
+    bool Enabled,
+    string Source);
+
+public sealed record SpendableCurrencyItem(
+    uint ItemId,
+    string ItemName,
+    uint IconId,
+    uint CurrencyId,
+    string CurrencyName,
+    uint CurrencyIconId,
+    uint Cost,
+    uint QuantityReceived,
+    string? SourceShopName,
+    string? SourceVendorName,
+    string? SourceZone,
+    string? SourceNotes,
+    SpendableItemKind ItemKind,
+    bool IsMarketable,
+    bool Disabled);
+
+public sealed record MarketSnapshot(
+    uint ItemId,
+    uint? CurrentFloor,
+    int Sales24h,
+    uint UnitsSold24h,
+    double? LastSaleAgeHours,
+    double? MedianSalePrice24h,
+    double? P25SalePrice24h,
+    double? ConservativeSalePrice,
+    uint? ActiveSupply,
+    TimeSpan? DataAge,
+    DateTimeOffset? LastCheckedUtc,
+    string? LastError);
+
+public sealed record ProfitResult(
+    SpendableCurrencyItem Item,
+    MarketSnapshot Market,
+    double? GilPerCurrency,
+    double? ExpectedTotal,
+    double LiquidityScore,
+    double FinalScore,
+    string Confidence);
+
+public sealed record CandidateCatalogLoadResult(
+    IReadOnlyList<TrackedCurrencyModel> Currencies,
+    IReadOnlyList<SpendableCurrencyItem> Items,
+    CandidateSourceStatus Status);
+
 public sealed record CurrencyVendorCandidate(
     uint ItemId,
     string ItemName,
