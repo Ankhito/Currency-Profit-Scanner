@@ -15,8 +15,6 @@ public sealed class PluginConfiguration : IPluginConfiguration
 
     public int CacheTtlMinutes { get; set; } = 10;
 
-    public int MinimumSales24h { get; set; } = 3;
-
     public bool HideStaleData { get; set; }
 
     public bool HideNoMovementItems { get; set; } = true;

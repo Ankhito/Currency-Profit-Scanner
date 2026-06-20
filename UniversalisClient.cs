@@ -102,7 +102,7 @@ public sealed class UniversalisClient : IDisposable
         CancellationToken cancellationToken)
     {
         var ids = string.Join(",", itemIds);
-        var url = $"{BaseUrl}/{worldOrDc}/{ids}?listings=100&entriesToReturn=100&fields=items,lastUploadTime";
+        var url = $"{BaseUrl}/{worldOrDc}/{ids}?listings=100&entriesToReturn=100";
 
         try
         {
@@ -118,6 +118,16 @@ public sealed class UniversalisClient : IDisposable
             }
 
             await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+            if (itemIds.Count == 1)
+            {
+                var itemId = itemIds.First();
+                var item = await JsonSerializer.DeserializeAsync<UniversalisItemResponse>(stream, JsonOptions, cancellationToken).ConfigureAwait(false);
+                return new Dictionary<uint, MarketData>
+                {
+                    [itemId] = Normalize(itemId, item),
+                };
+            }
+
             var payload = await JsonSerializer.DeserializeAsync<UniversalisMultiItemResponse>(stream, JsonOptions, cancellationToken).ConfigureAwait(false);
             if (payload?.Items is null)
             {

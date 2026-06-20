@@ -4,11 +4,16 @@ namespace CurrencyProfitScanner;
 
 public sealed partial class CurrencyFirstWindow
 {
-    private void DrawAdvancedDiagnostics()
+    private void DrawAdvancedDiagnostics(bool forceOpen = false)
     {
-        if (!ImGui.CollapsingHeader("Advanced diagnostics"))
+        if (!forceOpen && !ImGui.CollapsingHeader("Advanced diagnostics"))
         {
             return;
+        }
+
+        if (forceOpen)
+        {
+            CurrencyUi.Section("Advanced diagnostics");
         }
 
         var candidate = this.scannerService.CandidateSourceStatus;

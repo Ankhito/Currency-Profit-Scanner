@@ -1,13 +1,20 @@
 using Dalamud.Plugin.Services;
+using FFXIVClientStructs.FFXIV.Client.Game;
 
 namespace CurrencyProfitScanner;
 
 public sealed class ProfitScannerService : IDisposable
 {
+    private const double SalesHalfLife = 6d;
+    private const double UnitsHalfLife = 30d;
+    private const double FreshSaleHalfLifeHours = 18d;
+    private const double SupplyDaysComfortZone = 4d;
+
     private readonly CurrencyCandidateSource candidateSource;
     private readonly UniversalisClient universalisClient;
     private readonly PluginConfiguration configuration;
     private readonly IPluginLog log;
+    private readonly object stateLock = new();
     private readonly Dictionary<string, IReadOnlyList<ProfitResult>> resultsByCurrency = new(StringComparer.Ordinal);
     private CancellationTokenSource? refreshCts;
 
@@ -55,29 +62,37 @@ public sealed class ProfitScannerService : IDisposable
     public void ReloadCandidates()
     {
         var catalog = this.candidateSource.LoadCatalog();
-        this.Currencies = catalog.Currencies;
-        this.Items = catalog.Items;
-        this.CandidateSourceStatus = catalog.Status;
-        this.resultsByCurrency.Clear();
-        this.Results = [];
-
-        if (this.SelectedCurrency is not null)
+        lock (this.stateLock)
         {
-            this.SelectedCurrency = this.Currencies.FirstOrDefault(currency => SameCurrency(currency, this.SelectedCurrency));
-        }
+            this.Currencies = catalog.Currencies;
+            this.RefreshCurrencyAmountsLocked();
+            this.Items = catalog.Items;
+            this.CandidateSourceStatus = catalog.Status;
+            this.resultsByCurrency.Clear();
+            this.Results = [];
 
-        this.Status = catalog.Status.CandidateLoadStatus;
-        this.RankingStatus = new RankingStatus("Candidate data reloaded. Select a currency and refresh market data.", null, 0, 0, 0, 0);
+            if (this.SelectedCurrency is not null)
+            {
+                this.SelectedCurrency = this.Currencies.FirstOrDefault(currency => SameCurrency(currency, this.SelectedCurrency));
+            }
+
+            this.Status = catalog.Status.CandidateLoadStatus;
+            this.RankingStatus = new RankingStatus("Candidate data reloaded. Select a currency and refresh market data.", null, 0, 0, 0, 0);
+        }
     }
 
     public void SelectCurrency(TrackedCurrencyModel currency)
     {
-        this.SelectedCurrency = currency;
-        this.Results = this.GetResultsForCurrency(currency);
-        this.RankingStatus = this.Results.Count == 0
-            ? new RankingStatus("Currency selected. Refresh market data to rank sellable items.", null, 0, 0, 0, 0)
-            : BuildRankingStatus("Loaded cached rankings for selected currency.", this.Results);
-        this.Status = this.RankingStatus.Status;
+        lock (this.stateLock)
+        {
+            this.RefreshCurrencyAmountsLocked();
+            this.SelectedCurrency = currency;
+            this.Results = this.GetResultsForCurrencyLocked(currency);
+            this.RankingStatus = this.Results.Count == 0
+                ? new RankingStatus("Currency selected. Refresh market data to rank sellable items.", null, 0, 0, 0, 0)
+                : BuildRankingStatus("Loaded cached rankings for selected currency.", this.Results);
+            this.Status = this.RankingStatus.Status;
+        }
     }
 
     public IReadOnlyList<SpendableCurrencyItem> GetAllItemsForCurrency(TrackedCurrencyModel currency)
@@ -102,14 +117,33 @@ public sealed class ProfitScannerService : IDisposable
     public IReadOnlyList<SpendableCurrencyItem> GetOtherItemsForCurrency(TrackedCurrencyModel currency)
     {
         return this.Items
-            .Where(item => SameCurrency(item, currency) && !item.IsMarketable && !item.Disabled)
+            .Where(item => SameCurrency(item, currency) && !item.IsMarketable && item.ItemKind == SpendableItemKind.Other && !item.Disabled)
+            .OrderBy(item => item.ItemName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    public void RefreshCurrencyAmounts()
+    {
+        lock (this.stateLock)
+        {
+            this.RefreshCurrencyAmountsLocked();
+        }
+    }
+
+    public IReadOnlyList<SpendableCurrencyItem> GetItemsByKindForCurrency(TrackedCurrencyModel currency, SpendableItemKind kind)
+    {
+        return this.Items
+            .Where(item => SameCurrency(item, currency) && item.ItemKind.HasFlag(kind) && !item.Disabled)
             .OrderBy(item => item.ItemName, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
 
     public IReadOnlyList<ProfitResult> GetResultsForCurrency(TrackedCurrencyModel currency)
     {
-        return this.resultsByCurrency.TryGetValue(CurrencyKey(currency), out var results) ? results : [];
+        lock (this.stateLock)
+        {
+            return this.GetResultsForCurrencyLocked(currency);
+        }
     }
 
     public double? GetBestGilPerCurrency(TrackedCurrencyModel currency)
@@ -136,29 +170,39 @@ public sealed class ProfitScannerService : IDisposable
 
     public async Task RefreshSelectedCurrencyAsync(string worldOrDc)
     {
-        if (this.IsRefreshing || this.SelectedCurrency is null)
+        TrackedCurrencyModel selected;
+        CancellationTokenSource cts;
+        lock (this.stateLock)
         {
-            return;
+            if (this.IsRefreshing || this.SelectedCurrency is null)
+            {
+                return;
+            }
+
+            this.refreshCts?.Cancel();
+            this.refreshCts?.Dispose();
+            cts = new CancellationTokenSource();
+            this.refreshCts = cts;
+            selected = this.SelectedCurrency;
+            this.IsRefreshing = true;
+            this.Status = "Refreshing selected currency market data...";
         }
 
-        this.refreshCts?.Cancel();
-        this.refreshCts?.Dispose();
-        this.refreshCts = new CancellationTokenSource();
-        var token = this.refreshCts.Token;
-
-        this.IsRefreshing = true;
-        this.Status = "Refreshing selected currency market data...";
+        var token = cts.Token;
 
         try
         {
-            var selected = this.SelectedCurrency;
             var candidates = this.GetSellableItemsForCurrency(selected);
             if (candidates.Count == 0)
             {
-                this.Results = [];
-                this.resultsByCurrency.Remove(CurrencyKey(selected));
-                this.Status = "Selected currency has no verified marketable candidates.";
-                this.RankingStatus = new RankingStatus(this.Status, null, 0, 0, 0, 0);
+                lock (this.stateLock)
+                {
+                    this.Results = [];
+                    this.resultsByCurrency.Remove(CurrencyKey(selected));
+                    this.Status = "Selected currency has no verified marketable candidates.";
+                    this.RankingStatus = new RankingStatus(this.Status, null, 0, 0, 0, 0);
+                }
+
                 return;
             }
 
@@ -176,31 +220,43 @@ public sealed class ProfitScannerService : IDisposable
                 .ThenByDescending(result => result.GilPerCurrency ?? 0)
                 .ToList();
 
-            this.Results = results;
-            this.resultsByCurrency[CurrencyKey(selected)] = results;
-
-            this.LastRefreshUtc = DateTimeOffset.UtcNow;
             var zeroSaleCount = results.Count(result => result.Market.Sales24h == 0);
-            this.Status = results.Count == 0
+            var status = results.Count == 0
                 ? "Candidates loaded, but no rankings produced."
                 : zeroSaleCount == results.Count
                     ? "Candidates loaded, but no 24h sales found."
                     : "Candidates loaded, market data fetched, rankings produced.";
-            this.RankingStatus = BuildRankingStatus(this.Status, results);
+            lock (this.stateLock)
+            {
+                this.Results = results;
+                this.resultsByCurrency[CurrencyKey(selected)] = results;
+                this.LastRefreshUtc = DateTimeOffset.UtcNow;
+                this.Status = status;
+                this.RankingStatus = BuildRankingStatus(this.Status, results);
+            }
         }
         catch (OperationCanceledException)
         {
-            this.Status = "Refresh cancelled.";
+            lock (this.stateLock)
+            {
+                this.Status = "Refresh cancelled.";
+            }
         }
         catch (Exception ex)
         {
             this.log.Error(ex, "Currency Profit Scanner refresh failed");
-            this.Status = "Refresh failed. See Dalamud log.";
-            this.RankingStatus = this.RankingStatus with { Status = this.Status, LastError = ex.Message };
+            lock (this.stateLock)
+            {
+                this.Status = "Refresh failed. See Dalamud log.";
+                this.RankingStatus = this.RankingStatus with { Status = this.Status, LastError = ex.Message };
+            }
         }
         finally
         {
-            this.IsRefreshing = false;
+            lock (this.stateLock)
+            {
+                this.IsRefreshing = false;
+            }
         }
     }
 
@@ -231,22 +287,29 @@ public sealed class ProfitScannerService : IDisposable
         var conservative = MinNullable(median, p25 * 1.15, floorAsDouble * 0.98);
         var expectedTotal = conservative * item.QuantityReceived * config.TaxBufferMultiplier;
         var gilPerCurrency = item.Cost == 0 ? null : expectedTotal / item.Cost;
-        var liquidity = 0.60 * Clamp(salesCount / 10d) +
-                        0.25 * Clamp(unitsSold / 50d) +
-                        0.15 * Math.Exp(-(lastSaleAge ?? 24) / 12d);
-        var supply = Clamp(unitsSold / (double)Math.Max(data.TotalListedQuantity ?? 1, 1));
+        var saleVelocity = SaturatingScore(salesCount, SalesHalfLife);
+        var unitVelocity = SaturatingScore(unitsSold, UnitsHalfLife);
+        var recency = Math.Exp(-(lastSaleAge ?? 36d) / FreshSaleHalfLifeHours);
+        var liquidity = salesCount == 0
+            ? 0d
+            : 0.50 * saleVelocity + 0.30 * unitVelocity + 0.20 * recency;
+        var supply = SupplyScore(data.TotalListedQuantity, unitsSold);
         var staleMultiplier = stale ? 0.25 : 1d;
         var finalScore = salesCount == 0 || gilPerCurrency is null
             ? 0
-            : gilPerCurrency.Value * (0.20 + 0.80 * liquidity) * (0.50 + 0.50 * supply) * staleMultiplier;
+            : gilPerCurrency.Value * liquidity * supply * staleMultiplier;
 
         var confidence = salesCount == 0
             ? "No 24h movement"
-            : salesCount < config.MinimumSales24h
-                ? "Speculative"
-                : stale
-                    ? "Stale"
-                    : "Recent sales";
+            : stale
+                ? "Stale"
+                : liquidity < 0.45
+                    ? "Thin market"
+                    : supply < 0.45
+                        ? "Crowded market"
+                        : liquidity < 0.70
+                            ? "Healthy"
+                            : "Strong";
 
         var snapshot = new MarketSnapshot(
             item.ItemId,
@@ -278,11 +341,25 @@ public sealed class ProfitScannerService : IDisposable
             null,
             results.Count,
             results.Count(result => result.Market.Sales24h == 0),
-            results.Count(result => result.Confidence == "Speculative"),
+            results.Count(result => result.Confidence is "Thin market" or "Crowded market"),
             results.Count(result => result.Confidence == "Stale"));
     }
 
     private static string CurrencyKey(TrackedCurrencyModel currency) => $"{currency.CurrencyId}:{currency.Name}";
+
+    private IReadOnlyList<ProfitResult> GetResultsForCurrencyLocked(TrackedCurrencyModel currency)
+    {
+        return this.resultsByCurrency.TryGetValue(CurrencyKey(currency), out var results) ? results : [];
+    }
+
+    private unsafe void RefreshCurrencyAmountsLocked()
+    {
+        this.Currencies = this.Currencies
+            .Select(currency => currency.CurrencyId == 0
+                ? currency
+                : currency with { CurrentAmount = (uint)InventoryManager.Instance()->GetInventoryItemCount(currency.CurrencyId, false, false, false) })
+            .ToList();
+    }
 
     private static bool SameCurrency(SpendableCurrencyItem item, TrackedCurrencyModel currency) =>
         item.CurrencyId == currency.CurrencyId && item.CurrencyName.Equals(currency.Name, StringComparison.Ordinal);
@@ -293,11 +370,33 @@ public sealed class ProfitScannerService : IDisposable
     private static int MovementTier(ProfitResult result)
     {
         return result.Market.Sales24h == 0 ? 0 :
-            result.Confidence == "Speculative" ? 1 :
-            result.Confidence == "Stale" ? 2 : 3;
+            result.Confidence == "Stale" ? 1 :
+            result.Confidence is "Thin market" or "Crowded market" ? 2 :
+            result.Confidence == "Healthy" ? 3 : 4;
     }
 
     private static double Clamp(double value) => Math.Clamp(value, 0d, 1d);
+
+    private static double SaturatingScore(double value, double halfLife)
+    {
+        return 1d - Math.Exp(-Math.Max(value, 0d) / halfLife);
+    }
+
+    private static double SupplyScore(uint? activeSupply, uint unitsSold24h)
+    {
+        if (unitsSold24h == 0)
+        {
+            return 0d;
+        }
+
+        if (activeSupply is null or 0)
+        {
+            return 0.75d;
+        }
+
+        var daysOfSupply = activeSupply.Value / (double)unitsSold24h;
+        return 0.25d + 0.75d / (1d + daysOfSupply / SupplyDaysComfortZone);
+    }
 
     private static double? MinNullable(params double?[] values)
     {

@@ -93,13 +93,6 @@ public sealed class ScannerWindow : IDisposable
             this.configuration.Save();
         }
 
-        var minSales = this.configuration.MinimumSales24h;
-        if (ImGui.InputInt("Minimum sales 24h", ref minSales))
-        {
-            this.configuration.MinimumSales24h = Math.Max(0, minSales);
-            this.configuration.Save();
-        }
-
         if (ImGui.Button("Reload Candidates"))
         {
             this.scannerService.ReloadCandidates();
@@ -327,7 +320,7 @@ public sealed class ScannerWindow : IDisposable
         ImGui.TextUnformatted($"Status: {ranking.Status}");
         ImGui.TextUnformatted($"Ranked results: {ranking.RankedResultCount:N0}");
         ImGui.TextUnformatted($"Zero-sale results: {ranking.ZeroSaleCount:N0}");
-        ImGui.TextUnformatted($"Speculative results: {ranking.SpeculativeCount:N0}");
+        ImGui.TextUnformatted($"Risky market results: {ranking.RiskyMarketCount:N0}");
         ImGui.TextUnformatted($"Stale-data results: {ranking.StaleDataCount:N0}");
         ImGui.TextUnformatted($"Ranking last error: {ranking.LastError ?? "none"}");
 

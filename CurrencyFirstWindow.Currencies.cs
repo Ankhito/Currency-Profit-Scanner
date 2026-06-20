@@ -6,7 +6,8 @@ public sealed partial class CurrencyFirstWindow
 {
     private void DrawCurrencies()
     {
-        ImGui.TextUnformatted("Currencies");
+        CurrencyUi.Section("Currencies");
+        this.scannerService.RefreshCurrencyAmounts();
         if (this.scannerService.Currencies.Count == 0)
         {
             ImGui.TextWrapped("No currencies loaded yet. Add currencies/items to currency-candidates.json or use Lumina shop extraction, then reload.");

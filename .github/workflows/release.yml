@@ -1,26 +1,21 @@
-name: Release
+name: Build and Release
 
 on:
-  workflow_dispatch:
-  issues:
-    types:
-      - opened
   push:
+    branches:
+      - main
     tags:
       - "v*"
-    branches:
-      - "v*"
+  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: write
-  issues: write
-
-env:
-  MANUAL_RELEASE_TAG: v0.1.3
+  actions: write
 
 jobs:
-  build-release:
-    if: github.event_name != 'issues' || github.event.issue.title == 'release: v0.1.3'
+  build:
+    if: github.ref_type != 'tag'
     runs-on: windows-latest
 
     steps:
@@ -32,18 +27,32 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
-      - name: Resolve release tag
-        id: release
+      - name: Install Dalamud dev files
         shell: pwsh
         run: |
-          if ("${{ github.ref_type }}" -eq "tag") {
-            "tag=${{ github.ref_name }}" >> $env:GITHUB_OUTPUT
-          } else {
-            "tag=$env:MANUAL_RELEASE_TAG" >> $env:GITHUB_OUTPUT
-          }
+          $hooks = Join-Path $env:APPDATA "XIVLauncher/addon/Hooks/dev"
+          New-Item -ItemType Directory -Force -Path $hooks | Out-Null
+          Invoke-WebRequest -UseBasicParsing "https://goatcorp.github.io/dalamud-distrib/latest.zip" -OutFile "$env:RUNNER_TEMP/dalamud.zip"
+          Expand-Archive "$env:RUNNER_TEMP/dalamud.zip" -DestinationPath $hooks -Force
 
       - name: Restore
         run: dotnet restore CurrencyProfitScanner.csproj
+
+      - name: Build
+        run: dotnet build CurrencyProfitScanner.csproj --configuration Release --no-restore
+
+  release:
+    if: github.ref_type == 'tag'
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
 
       - name: Install Dalamud dev files
         shell: pwsh
@@ -52,6 +61,19 @@ jobs:
           New-Item -ItemType Directory -Force -Path $hooks | Out-Null
           Invoke-WebRequest -UseBasicParsing "https://goatcorp.github.io/dalamud-distrib/latest.zip" -OutFile "$env:RUNNER_TEMP/dalamud.zip"
           Expand-Archive "$env:RUNNER_TEMP/dalamud.zip" -DestinationPath $hooks -Force
+
+      - name: Validate tag matches project version
+        shell: pwsh
+        run: |
+          [xml]$project = Get-Content CurrencyProfitScanner.csproj
+          $version = $project.Project.PropertyGroup.Version
+          $expected = "v$version"
+          if ("${{ github.ref_name }}" -ne $expected) {
+            throw "Tag ${{ github.ref_name }} does not match project version $expected"
+          }
+
+      - name: Restore
+        run: dotnet restore CurrencyProfitScanner.csproj
 
       - name: Build plugin package
         run: dotnet build CurrencyProfitScanner.csproj --configuration Release --no-restore
@@ -77,15 +99,23 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ steps.package.outputs.zip }}
-          name: Currency Profit Scanner ${{ steps.release.outputs.tag }}
-          tag_name: ${{ steps.release.outputs.tag }}
+          name: Currency Profit Scanner ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
           target_commitish: ${{ github.sha }}
           overwrite_files: true
           make_latest: true
 
-      - name: Close release trigger issue
-        if: github.event_name == 'issues'
+      - name: Dispatch pluginmaster update
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh issue close ${{ github.event.issue.number }} --comment "Release workflow processed ${{ steps.release.outputs.tag }}."
+        run: |
+          $payload = @{
+            event_type = "update-pluginmaster"
+            client_payload = @{
+              repository = "${{ github.repository }}"
+              tag = "${{ github.ref_name }}"
+            }
+          } | ConvertTo-Json -Compress
+
+          $payload | gh api repos/Ankhito/AnkhitoPlugins/dispatches --method POST --input -

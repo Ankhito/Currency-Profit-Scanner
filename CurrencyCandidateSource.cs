@@ -60,6 +60,8 @@ public sealed class CurrencyCandidateSource
 
         try
         {
+            currencies.AddRange(this.LoadKnownCurrencies(itemSheet));
+
             var specialShopResult = this.LoadSpecialShopCandidates(itemSheet);
             currencies.AddRange(specialShopResult.Currencies);
             items.AddRange(specialShopResult.Candidates);
@@ -140,7 +142,7 @@ public sealed class CurrencyCandidateSource
             MarketabilityPath: "Item.ItemSearchCategory.RowId > 0 and Item.IsUntradable == false",
             CandidateSourceType: usedFallbackCurrencies
                 ? "Built-in currency catalog fallback + Lumina/JSON item enrichment"
-                : "Lumina SpecialShop + standalone JSON currencies + validated JSON seed",
+                : "Known currency catalog + Lumina SpecialShop + validated JSON seed",
             CandidateLoadStatus: statusText,
             CandidateCount: dedupedItems.Count,
             CandidateInvalidCount: invalid,
@@ -223,6 +225,7 @@ public sealed class CurrencyCandidateSource
                         unmarketable++;
                     }
 
+                    var kind = marketable ? SpendableItemKind.Sellable : InferKind(item.Name.ExtractText());
                     candidates.Add(new SpendableCurrencyItem(
                         itemId,
                         item.Name.ExtractText(),
@@ -245,7 +248,7 @@ public sealed class CurrencyCandidateSource
                         null,
                         null,
                         null,
-                        marketable ? SpendableItemKind.Sellable : SpendableItemKind.Other,
+                        kind,
                         marketable,
                         false));
                 }
@@ -336,6 +339,7 @@ public sealed class CurrencyCandidateSource
                 unmarketable++;
             }
 
+            var kind = marketable ? SpendableItemKind.Sellable : InferKind(item.Name.ExtractText());
             candidates.Add(new SpendableCurrencyItem(
                 seed.ItemId,
                 item.Name.ExtractText(),
@@ -356,7 +360,7 @@ public sealed class CurrencyCandidateSource
                 seed.Z,
                 seed.AetheryteId,
                 seed.LifestreamCommand,
-                marketable ? SpendableItemKind.Sellable : SpendableItemKind.Other,
+                kind,
                 marketable,
                 false));
         }
@@ -404,21 +408,119 @@ public sealed class CurrencyCandidateSource
         return new TrackedCurrencyModel(currencyId, name, icon, null, maxAmount, true, source);
     }
 
+    private IReadOnlyList<TrackedCurrencyModel> LoadKnownCurrencies(Lumina.Excel.ExcelSheet<Item> itemSheet)
+    {
+        var currencies = new List<TrackedCurrencyModel>();
+        foreach (var currency in KnownCurrencies)
+        {
+            var model = this.BuildCurrencyModel(itemSheet, currency.CurrencyId, currency.Name, 0, currency.MaxAmount, currency.Source);
+            if (model is not null)
+            {
+                currencies.Add(model);
+            }
+        }
+
+        try
+        {
+            var tomestoneSheet = this.dataManager.GetExcelSheet<TomestonesItem>();
+            var nonLimited = tomestoneSheet?.FirstOrDefault(item => item.Tomestones.RowId is 2);
+            var limited = tomestoneSheet?.FirstOrDefault(item => item.Tomestones.RowId is 3);
+            if (nonLimited is { RowId: not 0 })
+            {
+                var model = this.BuildCurrencyModel(itemSheet, nonLimited.Value.Item.RowId, null, 0, 2000, "Known currency catalog: current non-limited tomestone");
+                if (model is not null)
+                {
+                    currencies.Add(model);
+                }
+            }
+
+            if (limited is { RowId: not 0 })
+            {
+                var model = this.BuildCurrencyModel(itemSheet, limited.Value.Item.RowId, null, 0, 2000, "Known currency catalog: current weekly-capped tomestone");
+                if (model is not null)
+                {
+                    currencies.Add(model);
+                }
+            }
+        }
+        catch
+        {
+            // Optional expansion only; static known currencies still cover the common list.
+        }
+
+        return currencies;
+    }
+
     private static IReadOnlyList<TrackedCurrencyModel> LoadFallbackCurrencies() =>
     [
-        new TrackedCurrencyModel(0, "Allagan Tomestones", 0, null, null, true, "Built-in category"),
-        new TrackedCurrencyModel(0, "Crafter Scrips", 0, null, null, true, "Built-in category"),
-        new TrackedCurrencyModel(0, "Gatherer Scrips", 0, null, null, true, "Built-in category"),
-        new TrackedCurrencyModel(0, "Bicolor Gemstones", 0, null, null, true, "Built-in category"),
-        new TrackedCurrencyModel(0, "Grand Company Seals", 0, null, null, true, "Built-in category"),
-        new TrackedCurrencyModel(0, "Allied / Centurio / Sacks of Nuts", 0, null, null, true, "Built-in category"),
-        new TrackedCurrencyModel(0, "Wolf Marks", 0, null, null, true, "Built-in category"),
-        new TrackedCurrencyModel(0, "MGP", 0, null, null, true, "Built-in category"),
-        new TrackedCurrencyModel(0, "Tribe Currencies", 0, null, null, true, "Built-in category"),
-        new TrackedCurrencyModel(0, "Cosmic Exploration Currencies", 0, null, null, true, "Built-in category"),
+        .. KnownCurrencies.Select(currency => new TrackedCurrencyModel(
+            currency.CurrencyId,
+            currency.Name,
+            0,
+            null,
+            currency.MaxAmount,
+            true,
+            currency.Source)),
+    ];
+
+    private static readonly KnownCurrency[] KnownCurrencies =
+    [
+        new(20, "Storm Seal", 90000, "Known currency catalog: Grand Company"),
+        new(21, "Serpent Seal", 90000, "Known currency catalog: Grand Company"),
+        new(22, "Flame Seal", 90000, "Known currency catalog: Grand Company"),
+        new(29, "MGP", 9999999, "Known currency catalog: Gold Saucer"),
+        new(28, "Allagan Tomestone of Poetics", 2000, "Known currency catalog: tomestone"),
+        new(25, "Wolf Mark", 20000, "Known currency catalog: PvP"),
+        new(36656, "Trophy Crystal", 20000, "Known currency catalog: PvP"),
+        new(27, "Allied Seal", 4000, "Known currency catalog: hunt"),
+        new(10307, "Centurio Seal", 4000, "Known currency catalog: hunt"),
+        new(13625, "Centurio Clan Mark Log", null, "Known currency catalog: hunt sub-currency"),
+        new(20308, "Veteran's Clan Mark Log", null, "Known currency catalog: hunt sub-currency"),
+        new(21103, "Mythic Clan Mark Log", null, "Known currency catalog: hunt sub-currency"),
+        new(26533, "Sack of Nuts", 4000, "Known currency catalog: hunt"),
+        new(26807, "Bicolor Gemstone", 1500, "Known currency catalog: FATE"),
+        new(35833, "Bicolor Gemstone Voucher", null, "Known currency catalog: FATE sub-currency"),
+        new(43961, "Turali Bicolor Gemstone Voucher", null, "Known currency catalog: FATE sub-currency"),
+        new(33913, "Purple Crafters' Scrip", 4000, "Known currency catalog: crafter scrip"),
+        new(41784, "Orange Crafters' Scrip", 4000, "Known currency catalog: crafter scrip"),
+        new(33914, "Purple Gatherers' Scrip", 4000, "Known currency catalog: gatherer scrip"),
+        new(41785, "Orange Gatherers' Scrip", 4000, "Known currency catalog: gatherer scrip"),
+        new(12839, "Crafter's Delineation", null, "Known currency catalog: scrip sub-currency"),
+        new(41807, "Scrip Exchange Voucher", null, "Known currency catalog: scrip sub-currency"),
+        new(28063, "Skybuilders' Scrip", 10000, "Known currency catalog: restoration"),
+        new(37549, "Seafarer's Cowrie", 9999999, "Known currency catalog: Island Sanctuary"),
+        new(37550, "Islander Cowrie", 9999999, "Known currency catalog: Island Sanctuary"),
+        new(45690, "Cosmocredit", 30000, "Known currency catalog: Cosmic Exploration"),
+        new(45691, "Lunar Credit", 10000, "Known currency catalog: Cosmic Exploration"),
+        new(48146, "Phaenna Credit", 10000, "Known currency catalog: Cosmic Exploration"),
+        new(48147, "Oizys Credit", 10000, "Known currency catalog: Cosmic Exploration"),
+        new(48148, "Auxesia Credit", 10000, "Known currency catalog: Cosmic Exploration"),
     ];
 
     private static bool IsMarketable(Item item) => !item.IsUntradable && item.ItemSearchCategory.RowId > 0;
+
+    private static SpendableItemKind InferKind(string itemName)
+    {
+        if (itemName.Contains("Venture", StringComparison.OrdinalIgnoreCase))
+        {
+            return SpendableItemKind.Venture;
+        }
+
+        if (itemName.Contains("Orchestrion", StringComparison.OrdinalIgnoreCase) ||
+            itemName.Contains("Triple Triad", StringComparison.OrdinalIgnoreCase) ||
+            itemName.Contains("Card", StringComparison.OrdinalIgnoreCase) ||
+            itemName.Contains("Minion", StringComparison.OrdinalIgnoreCase) ||
+            itemName.Contains("Mount", StringComparison.OrdinalIgnoreCase) ||
+            itemName.Contains("Roll", StringComparison.OrdinalIgnoreCase) ||
+            itemName.Contains("Emote", StringComparison.OrdinalIgnoreCase) ||
+            itemName.Contains("Hairstyle", StringComparison.OrdinalIgnoreCase) ||
+            itemName.Contains("Framer", StringComparison.OrdinalIgnoreCase))
+        {
+            return SpendableItemKind.Collectable;
+        }
+
+        return SpendableItemKind.Other;
+    }
 
     private sealed class SeedCandidate
     {
@@ -484,4 +586,6 @@ public sealed class CurrencyCandidateSource
         IReadOnlyList<SpendableCurrencyItem> Candidates,
         int InvalidCount,
         int UnmarketableCount);
+
+    private sealed record KnownCurrency(uint CurrencyId, string Name, uint? MaxAmount, string Source);
 }

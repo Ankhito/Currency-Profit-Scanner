@@ -104,7 +104,7 @@ public sealed record RankingStatus(
     string? LastError,
     int RankedResultCount,
     int ZeroSaleCount,
-    int SpeculativeCount,
+    int RiskyMarketCount,
     int StaleDataCount);
 
 public sealed record SaleEntry(
