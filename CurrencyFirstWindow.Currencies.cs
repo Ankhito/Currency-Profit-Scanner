@@ -56,7 +56,7 @@ public sealed partial class CurrencyFirstWindow
             if (ImGui.Button($"Spend it##{currency.CurrencyId}-{currency.Name}"))
             {
                 this.scannerService.SelectCurrency(currency);
-                this.detailOpen = true;
+                this.OpenDetailWindow();
                 this.RefreshSelectedCurrency();
             }
         }

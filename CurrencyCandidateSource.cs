@@ -213,9 +213,10 @@ public sealed class CurrencyCandidateSource
                     if (!marketable)
                     {
                         unmarketable++;
+                        continue;
                     }
 
-                    var kind = marketable ? SpendableItemKind.Sellable : InferKind(item.Name.ExtractText());
+                    var kind = SpendableItemKind.Sellable;
                     candidates.Add(new SpendableCurrencyItem(
                         itemId,
                         item.Name.ExtractText(),
@@ -228,9 +229,7 @@ public sealed class CurrencyCandidateSource
                         null,
                         sourceShopName,
                         null,
-                        marketable
-                            ? $"Lumina SpecialShop row {shop.RowId}; receive/cost index {i}; raw currency {rawCostItemId}."
-                            : $"Lumina SpecialShop row {shop.RowId}; non-marketable reward at receive/cost index {i}; raw currency {rawCostItemId}.",
+                        $"Lumina SpecialShop row {shop.RowId}; receive/cost index {i}; raw currency {rawCostItemId}.",
                         null,
                         null,
                         null,
@@ -239,7 +238,7 @@ public sealed class CurrencyCandidateSource
                         null,
                         null,
                         kind,
-                        marketable,
+                        true,
                         false));
                 }
             }
@@ -375,9 +374,10 @@ public sealed class CurrencyCandidateSource
             if (!marketable)
             {
                 unmarketable++;
+                continue;
             }
 
-            var kind = marketable ? SpendableItemKind.Sellable : InferKind(item.Name.ExtractText());
+            var kind = SpendableItemKind.Sellable;
             candidates.Add(new SpendableCurrencyItem(
                 seed.ItemId,
                 item.Name.ExtractText(),
@@ -399,7 +399,7 @@ public sealed class CurrencyCandidateSource
                 seed.AetheryteId,
                 seed.LifestreamCommand,
                 kind,
-                marketable,
+                true,
                 false));
         }
 

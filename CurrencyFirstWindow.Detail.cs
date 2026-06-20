@@ -12,16 +12,24 @@ public sealed partial class CurrencyFirstWindow
         }
 
         var open = this.detailOpen;
+        if (this.detailFocusRequested)
+        {
+            ImGui.SetNextWindowCollapsed(false);
+            ImGui.SetNextWindowFocus();
+        }
+
         CurrencyUi.PushTheme();
         if (!ImGui.Begin($"Spend {currency.Name}###currency-detail", ref open))
         {
             this.detailOpen = open;
+            this.detailFocusRequested = false;
             ImGui.End();
             CurrencyUi.PopTheme();
             return;
         }
 
         this.detailOpen = open;
+        this.detailFocusRequested = false;
         ImGui.TextUnformatted(currency.Name);
         ImGui.TextUnformatted($"Shop items: {this.scannerService.GetAllItemsForCurrency(currency).Count:N0}");
         ImGui.TextUnformatted($"Sellable: {this.scannerService.GetSellableItemsForCurrency(currency).Count:N0}");
@@ -50,9 +58,6 @@ public sealed partial class CurrencyFirstWindow
 
         ImGui.Separator();
         this.DrawProfitTable(currency);
-        this.DrawItemBucket("Unlocks / Collectables", this.scannerService.GetItemsByKindForCurrency(currency, SpendableItemKind.Collectable));
-        this.DrawItemBucket("Ventures", this.scannerService.GetItemsByKindForCurrency(currency, SpendableItemKind.Venture));
-        this.DrawItemBucket("Other Purchasables", this.scannerService.GetOtherItemsForCurrency(currency));
 
         this.DrawAdvancedDiagnostics();
         ImGui.End();
@@ -129,39 +134,6 @@ public sealed partial class CurrencyFirstWindow
             this.Cell(FormatGil(result.GilPerCurrency));
             this.Cell(result.FinalScore.ToString("N2"));
             this.Cell(result.Confidence);
-            this.Cell(VendorText(item));
-            this.Cell(item.SourceZone ?? "Unknown");
-            ImGui.TableNextColumn();
-            this.DrawItemActions(item);
-        }
-
-        ImGui.EndTable();
-    }
-
-    private void DrawItemBucket(string label, IReadOnlyList<SpendableCurrencyItem> items)
-    {
-        if (items.Count == 0 || !ImGui.CollapsingHeader($"{label} ({items.Count:N0})"))
-        {
-            return;
-        }
-
-        if (!ImGui.BeginTable($"{label}-table", 5, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.Resizable | ImGuiTableFlags.ScrollX))
-        {
-            return;
-        }
-
-        ImGui.TableSetupColumn("Item");
-        ImGui.TableSetupColumn("Cost");
-        ImGui.TableSetupColumn("Vendor/Shop");
-        ImGui.TableSetupColumn("Zone");
-        ImGui.TableSetupColumn("Actions", ImGuiTableColumnFlags.NoSort);
-        ImGui.TableHeadersRow();
-
-        foreach (var item in items)
-        {
-            ImGui.TableNextRow();
-            this.Cell(item.ItemName);
-            this.Cell(item.Cost.ToString("N0"));
             this.Cell(VendorText(item));
             this.Cell(item.SourceZone ?? "Unknown");
             ImGui.TableNextColumn();

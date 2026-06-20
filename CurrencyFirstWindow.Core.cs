@@ -11,6 +11,7 @@ public sealed partial class CurrencyFirstWindow : IDisposable
     private readonly IpcDiagnosticsService ipcDiagnosticsService;
     private readonly NavigationIpcService navigationIpcService;
     private bool detailOpen;
+    private bool detailFocusRequested;
 
     public CurrencyFirstWindow(
         PluginConfiguration configuration,
@@ -152,6 +153,29 @@ public sealed partial class CurrencyFirstWindow : IDisposable
         }
 
         ImGui.SameLine();
+        var canRefreshAll = !this.scannerService.IsRefreshing && !string.IsNullOrWhiteSpace(this.EffectiveWorldOrDc);
+        if (!canRefreshAll)
+        {
+            ImGui.BeginDisabled();
+        }
+
+        if (ImGui.Button(this.scannerService.IsRefreshing ? "Refreshing..." : "Refresh all"))
+        {
+            this.RefreshAllCurrencies();
+        }
+
+        if (!canRefreshAll)
+        {
+            ImGui.EndDisabled();
+            if (ImGui.IsItemHovered())
+            {
+                ImGui.SetTooltip(string.IsNullOrWhiteSpace(this.EffectiveWorldOrDc)
+                    ? "Enter a world, data center, or region first."
+                    : "A market refresh is already running.");
+            }
+        }
+
+        ImGui.SameLine();
         ImGui.TextUnformatted(this.scannerService.Status);
     }
 
@@ -169,6 +193,28 @@ public sealed partial class CurrencyFirstWindow : IDisposable
         }
 
         _ = this.scannerService.RefreshSelectedCurrencyAsync(target);
+    }
+
+    private void RefreshAllCurrencies()
+    {
+        if (this.scannerService.IsRefreshing)
+        {
+            return;
+        }
+
+        var target = this.EffectiveWorldOrDc;
+        if (string.IsNullOrWhiteSpace(target))
+        {
+            return;
+        }
+
+        _ = this.scannerService.RefreshAllCurrenciesAsync(target);
+    }
+
+    private void OpenDetailWindow()
+    {
+        this.detailOpen = true;
+        this.detailFocusRequested = true;
     }
 
     private bool CanRefreshMarket(TrackedCurrencyModel? currency)

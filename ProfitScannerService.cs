@@ -9,6 +9,7 @@ public sealed class ProfitScannerService : IDisposable
     private const double UnitsHalfLife = 30d;
     private const double FreshSaleHalfLifeHours = 18d;
     private const double SupplyDaysComfortZone = 4d;
+    private static readonly TimeSpan RefreshAllCurrencyDelay = TimeSpan.FromMilliseconds(250);
 
     private readonly CurrencyCandidateSource candidateSource;
     private readonly UniversalisClient universalisClient;
@@ -42,6 +43,10 @@ public sealed class ProfitScannerService : IDisposable
     public bool IsRefreshing { get; private set; }
 
     public DateTimeOffset? LastRefreshUtc { get; private set; }
+
+    public int RefreshProgressCompleted { get; private set; }
+
+    public int RefreshProgressTotal { get; private set; }
 
     public string Status { get; private set; } = "Ready.";
 
@@ -209,26 +214,8 @@ public sealed class ProfitScannerService : IDisposable
                 return;
             }
 
-            var marketData = await this.universalisClient.GetMarketDataAsync(
-                worldOrDc,
-                candidates.Select(item => item.ItemId).Distinct().ToList(),
-                TimeSpan.FromMinutes(Math.Clamp(this.configuration.CacheTtlMinutes, 1, 120)),
-                token).ConfigureAwait(false);
-
-            var results = candidates
-                .Select(item => Calculate(item, marketData.GetValueOrDefault(item.ItemId), this.configuration))
-                .OrderByDescending(MovementTier)
-                .ThenByDescending(result => result.Market.Sales24h)
-                .ThenByDescending(result => result.Market.UnitsSold24h)
-                .ThenByDescending(result => result.GilPerCurrency ?? 0)
-                .ToList();
-
-            var zeroSaleCount = results.Count(result => result.Market.Sales24h == 0);
-            var status = results.Count == 0
-                ? "Candidates loaded, but no rankings produced."
-                : zeroSaleCount == results.Count
-                    ? "Candidates loaded, but no 24h sales found."
-                    : "Candidates loaded, market data fetched, rankings produced.";
+            var results = await this.RankCurrencyAsync(worldOrDc, candidates, token).ConfigureAwait(false);
+            var status = BuildRefreshStatus(results);
             lock (this.stateLock)
             {
                 this.Results = results;
@@ -251,6 +238,97 @@ public sealed class ProfitScannerService : IDisposable
             lock (this.stateLock)
             {
                 this.Status = "Refresh failed. See Dalamud log.";
+                this.RankingStatus = this.RankingStatus with { Status = this.Status, LastError = ex.Message };
+            }
+        }
+        finally
+        {
+            lock (this.stateLock)
+            {
+                this.IsRefreshing = false;
+            }
+        }
+    }
+
+    public async Task RefreshAllCurrenciesAsync(string worldOrDc)
+    {
+        CancellationTokenSource cts;
+        IReadOnlyList<TrackedCurrencyModel> currencies;
+        lock (this.stateLock)
+        {
+            if (this.IsRefreshing)
+            {
+                return;
+            }
+
+            this.refreshCts?.Cancel();
+            this.refreshCts?.Dispose();
+            cts = new CancellationTokenSource();
+            this.refreshCts = cts;
+            currencies = this.Currencies
+                .Where(currency => this.Items.Any(item => SameCurrency(item, currency) && item.IsMarketable && !item.Disabled))
+                .ToList();
+            this.IsRefreshing = true;
+            this.RefreshProgressCompleted = 0;
+            this.RefreshProgressTotal = currencies.Count;
+            this.Status = currencies.Count == 0
+                ? "Refresh all skipped: no currencies have marketable rewards."
+                : $"Refreshing all marketable currencies 0/{currencies.Count:N0}...";
+        }
+
+        var token = cts.Token;
+        try
+        {
+            for (var i = 0; i < currencies.Count; i++)
+            {
+                token.ThrowIfCancellationRequested();
+                var currency = currencies[i];
+                var candidates = this.GetSellableItemsForCurrency(currency);
+                if (candidates.Count > 0)
+                {
+                    var results = await this.RankCurrencyAsync(worldOrDc, candidates, token).ConfigureAwait(false);
+                    lock (this.stateLock)
+                    {
+                        this.resultsByCurrency[CurrencyKey(currency)] = results;
+                        if (this.SelectedCurrency is not null && SameCurrency(this.SelectedCurrency, currency))
+                        {
+                            this.Results = results;
+                            this.RankingStatus = BuildRankingStatus(BuildRefreshStatus(results), results);
+                        }
+                    }
+                }
+
+                lock (this.stateLock)
+                {
+                    this.RefreshProgressCompleted = i + 1;
+                    this.Status = $"Refreshing all marketable currencies {this.RefreshProgressCompleted:N0}/{this.RefreshProgressTotal:N0}...";
+                }
+
+                if (i + 1 < currencies.Count)
+                {
+                    await Task.Delay(RefreshAllCurrencyDelay, token).ConfigureAwait(false);
+                }
+            }
+
+            lock (this.stateLock)
+            {
+                this.LastRefreshUtc = DateTimeOffset.UtcNow;
+                this.Status = $"Refresh all complete: ranked {this.RefreshProgressCompleted:N0} currenc{(this.RefreshProgressCompleted == 1 ? "y" : "ies")}.";
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            lock (this.stateLock)
+            {
+                this.Status = "Refresh all cancelled.";
+            }
+        }
+        catch (Exception ex)
+        {
+            this.log.Error(ex, "Currency Profit Scanner refresh-all failed");
+            lock (this.stateLock)
+            {
+                this.Status = "Refresh all failed. See Dalamud log.";
                 this.RankingStatus = this.RankingStatus with { Status = this.Status, LastError = ex.Message };
             }
         }
@@ -346,6 +424,36 @@ public sealed class ProfitScannerService : IDisposable
             results.Count(result => result.Market.Sales24h == 0),
             results.Count(result => result.Confidence is "Thin market" or "Crowded market"),
             results.Count(result => result.Confidence == "Stale"));
+    }
+
+    private async Task<IReadOnlyList<ProfitResult>> RankCurrencyAsync(
+        string worldOrDc,
+        IReadOnlyList<SpendableCurrencyItem> candidates,
+        CancellationToken token)
+    {
+        var marketData = await this.universalisClient.GetMarketDataAsync(
+            worldOrDc,
+            candidates.Select(item => item.ItemId).Distinct().ToList(),
+            TimeSpan.FromMinutes(Math.Clamp(this.configuration.CacheTtlMinutes, 1, 120)),
+            token).ConfigureAwait(false);
+
+        return candidates
+            .Select(item => Calculate(item, marketData.GetValueOrDefault(item.ItemId), this.configuration))
+            .OrderByDescending(MovementTier)
+            .ThenByDescending(result => result.Market.Sales24h)
+            .ThenByDescending(result => result.Market.UnitsSold24h)
+            .ThenByDescending(result => result.GilPerCurrency ?? 0)
+            .ToList();
+    }
+
+    private static string BuildRefreshStatus(IReadOnlyList<ProfitResult> results)
+    {
+        var zeroSaleCount = results.Count(result => result.Market.Sales24h == 0);
+        return results.Count == 0
+            ? "Candidates loaded, but no rankings produced."
+            : zeroSaleCount == results.Count
+                ? "Candidates loaded, but no 24h sales found."
+                : "Candidates loaded, market data fetched, rankings produced.";
     }
 
     private static string CurrencyKey(TrackedCurrencyModel currency) => $"{currency.CurrencyId}:{currency.Name}";
