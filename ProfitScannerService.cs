@@ -88,9 +88,12 @@ public sealed class ProfitScannerService : IDisposable
             this.RefreshCurrencyAmountsLocked();
             this.SelectedCurrency = currency;
             this.Results = this.GetResultsForCurrencyLocked(currency);
-            this.RankingStatus = this.Results.Count == 0
-                ? new RankingStatus("Currency selected. Refresh market data to rank sellable items.", null, 0, 0, 0, 0)
-                : BuildRankingStatus("Loaded cached rankings for selected currency.", this.Results);
+            var sellableCount = this.Items.Count(item => SameCurrency(item, currency) && item.IsMarketable && !item.Disabled);
+            this.RankingStatus = this.Results.Count > 0
+                ? BuildRankingStatus("Loaded cached rankings for selected currency.", this.Results)
+                : sellableCount == 0
+                    ? new RankingStatus("Currency selected, but no marketable rewards are known for it yet.", null, 0, 0, 0, 0)
+                    : new RankingStatus("Currency selected. Refresh market data to rank sellable items.", null, 0, 0, 0, 0);
             this.Status = this.RankingStatus.Status;
         }
     }
@@ -199,7 +202,7 @@ public sealed class ProfitScannerService : IDisposable
                 {
                     this.Results = [];
                     this.resultsByCurrency.Remove(CurrencyKey(selected));
-                    this.Status = "Selected currency has no verified marketable candidates.";
+                    this.Status = "Refresh skipped: selected currency has no known marketable rewards to query.";
                     this.RankingStatus = new RankingStatus(this.Status, null, 0, 0, 0, 0);
                 }
 

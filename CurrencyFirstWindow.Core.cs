@@ -171,6 +171,36 @@ public sealed partial class CurrencyFirstWindow : IDisposable
         _ = this.scannerService.RefreshSelectedCurrencyAsync(target);
     }
 
+    private bool CanRefreshMarket(TrackedCurrencyModel? currency)
+    {
+        return currency is not null &&
+            !this.scannerService.IsRefreshing &&
+            !string.IsNullOrWhiteSpace(this.EffectiveWorldOrDc) &&
+            this.scannerService.GetSellableItemsForCurrency(currency).Count > 0;
+    }
+
+    private string RefreshDisabledReason(TrackedCurrencyModel? currency)
+    {
+        if (currency is null)
+        {
+            return "Select a currency first.";
+        }
+
+        if (this.scannerService.IsRefreshing)
+        {
+            return "A market refresh is already running.";
+        }
+
+        if (string.IsNullOrWhiteSpace(this.EffectiveWorldOrDc))
+        {
+            return "Enter a world, data center, or region first.";
+        }
+
+        return this.scannerService.GetSellableItemsForCurrency(currency).Count == 0
+            ? "This currency has no known marketable rewards, so there are no item IDs to query in Universalis."
+            : "Ready.";
+    }
+
     private void Cell(string value)
     {
         ImGui.TableNextColumn();

@@ -27,7 +27,8 @@ public sealed partial class CurrencyFirstWindow
         ImGui.TextUnformatted($"Sellable: {this.scannerService.GetSellableItemsForCurrency(currency).Count:N0}");
         ImGui.TextUnformatted($"Universalis target: {this.EffectiveWorldOrDc}");
         ImGui.TextUnformatted($"Market source: {this.universalisClient.Status}");
-        var canRefresh = !this.scannerService.IsRefreshing && !string.IsNullOrWhiteSpace(this.EffectiveWorldOrDc);
+        ImGui.TextWrapped(this.scannerService.Status);
+        var canRefresh = this.CanRefreshMarket(currency);
         if (!canRefresh)
         {
             ImGui.BeginDisabled();
@@ -41,6 +42,10 @@ public sealed partial class CurrencyFirstWindow
         if (!canRefresh)
         {
             ImGui.EndDisabled();
+            if (ImGui.IsItemHovered())
+            {
+                ImGui.SetTooltip(this.RefreshDisabledReason(currency));
+            }
         }
 
         ImGui.Separator();

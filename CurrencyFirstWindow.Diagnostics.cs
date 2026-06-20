@@ -30,9 +30,10 @@ public sealed partial class CurrencyFirstWindow
         ImGui.TextUnformatted($"Items requested: {this.universalisClient.LastItemsRequested:N0}");
         ImGui.TextUnformatted($"Items returned: {this.universalisClient.LastItemsReturned:N0}");
         ImGui.TextUnformatted($"Last error: {this.universalisClient.LastError ?? "none"}");
-        if (this.scannerService.SelectedCurrency is not null)
+        if (this.scannerService.SelectedCurrency is { } selectedCurrency)
         {
-            if (string.IsNullOrWhiteSpace(this.EffectiveWorldOrDc) || this.scannerService.IsRefreshing)
+            var canRefresh = this.CanRefreshMarket(selectedCurrency);
+            if (!canRefresh)
             {
                 ImGui.BeginDisabled();
             }
@@ -42,9 +43,13 @@ public sealed partial class CurrencyFirstWindow
                 this.RefreshSelectedCurrency();
             }
 
-            if (string.IsNullOrWhiteSpace(this.EffectiveWorldOrDc) || this.scannerService.IsRefreshing)
+            if (!canRefresh)
             {
                 ImGui.EndDisabled();
+                if (ImGui.IsItemHovered())
+                {
+                    ImGui.SetTooltip(this.RefreshDisabledReason(selectedCurrency));
+                }
             }
         }
     }
