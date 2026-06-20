@@ -87,32 +87,42 @@ public sealed partial class CurrencyFirstWindow
                 "Not fetched")).ToList();
         }
 
-        if (!ImGui.BeginTable($"profit-table-{currency.CurrencyId}-{currency.Name}", 12, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.Resizable | ImGuiTableFlags.ScrollX))
+        rows = this.DedupeProfitRows(rows);
+        var tableHeight = Math.Max(240f, ImGui.GetContentRegionAvail().Y * 0.72f);
+        const ImGuiTableFlags flags = ImGuiTableFlags.Borders |
+            ImGuiTableFlags.RowBg |
+            ImGuiTableFlags.Resizable |
+            ImGuiTableFlags.ScrollX |
+            ImGuiTableFlags.ScrollY |
+            ImGuiTableFlags.Sortable |
+            ImGuiTableFlags.SizingFixedFit;
+        if (!ImGui.BeginTable($"profit-table-{currency.CurrencyId}-{currency.Name}", 11, flags, new(0, tableHeight)))
         {
             return;
         }
 
-        ImGui.TableSetupColumn("Item");
-        ImGui.TableSetupColumn("Cost");
-        ImGui.TableSetupColumn("Qty");
-        ImGui.TableSetupColumn("Sales 24h");
-        ImGui.TableSetupColumn("Units 24h");
-        ImGui.TableSetupColumn("Floor");
-        ImGui.TableSetupColumn("Gil/cur");
-        ImGui.TableSetupColumn("Score");
-        ImGui.TableSetupColumn("Market");
-        ImGui.TableSetupColumn("Vendor/Shop");
-        ImGui.TableSetupColumn("Zone");
-        ImGui.TableSetupColumn("Actions", ImGuiTableColumnFlags.NoSort);
+        ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthFixed, 230f);
+        ImGui.TableSetupColumn("Cost", ImGuiTableColumnFlags.WidthFixed, 58f);
+        ImGui.TableSetupColumn("Sales", ImGuiTableColumnFlags.WidthFixed, 58f);
+        ImGui.TableSetupColumn("Units", ImGuiTableColumnFlags.WidthFixed, 58f);
+        ImGui.TableSetupColumn("Floor", ImGuiTableColumnFlags.WidthFixed, 82f);
+        ImGui.TableSetupColumn("Gil/cur", ImGuiTableColumnFlags.WidthFixed, 82f);
+        ImGui.TableSetupColumn("Score", ImGuiTableColumnFlags.WidthFixed, 68f);
+        ImGui.TableSetupColumn("Market", ImGuiTableColumnFlags.WidthFixed, 96f);
+        ImGui.TableSetupColumn("Source", ImGuiTableColumnFlags.WidthFixed, 170f);
+        ImGui.TableSetupColumn("Zone", ImGuiTableColumnFlags.WidthFixed, 110f);
+        ImGui.TableSetupColumn("Actions", ImGuiTableColumnFlags.NoSort | ImGuiTableColumnFlags.WidthFixed, 76f);
+        ImGui.TableSetupScrollFreeze(1, 1);
         ImGui.TableHeadersRow();
+
+        rows = this.SortProfitRows(rows);
 
         foreach (var result in rows)
         {
             var item = result.Item;
             ImGui.TableNextRow();
             this.Cell(item.ItemName);
-            this.Cell(item.Cost.ToString("N0"));
-            this.Cell(item.QuantityReceived.ToString("N0"));
+            this.Cell(item.QuantityReceived == 1 ? item.Cost.ToString("N0") : $"{item.Cost:N0} / {item.QuantityReceived:N0}");
             this.Cell(result.Market.Sales24h.ToString("N0"));
             this.Cell(result.Market.UnitsSold24h.ToString("N0"));
             this.Cell(result.Market.CurrentFloor?.ToString("N0") ?? "Unknown");
@@ -163,16 +173,95 @@ public sealed partial class CurrencyFirstWindow
 
     private void DrawItemActions(SpendableCurrencyItem item)
     {
-        if (ImGui.Button($"Copy name##name-{item.ItemId}-{item.CurrencyId}-{item.Cost}"))
+        if (ImGui.Button($"Name##name-{item.ItemId}-{item.CurrencyId}-{item.Cost}"))
         {
             ImGui.SetClipboardText(item.ItemName);
         }
 
         ImGui.SameLine();
-        if (ImGui.Button($"Copy ID##id-{item.ItemId}-{item.CurrencyId}-{item.Cost}"))
+        if (ImGui.Button($"ID##id-{item.ItemId}-{item.CurrencyId}-{item.Cost}"))
         {
             ImGui.SetClipboardText(item.ItemId.ToString());
         }
+    }
+
+    private IReadOnlyList<ProfitResult> DedupeProfitRows(IReadOnlyList<ProfitResult> rows)
+    {
+        return rows
+            .GroupBy(result => $"{result.Item.ItemId}:{result.Item.Cost}:{result.Item.QuantityReceived}:{result.Item.CurrencyId}", StringComparer.Ordinal)
+            .Select(group =>
+            {
+                var first = group.First();
+                var shops = group
+                    .Select(result => VendorText(result.Item))
+                    .Where(value => !string.IsNullOrWhiteSpace(value))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                if (shops.Count <= 1)
+                {
+                    return first;
+                }
+
+                return first with
+                {
+                    Item = first.Item with
+                    {
+                        SourceVendorName = null,
+                        SourceShopName = $"{shops.Count:N0} shops",
+                    },
+                };
+            })
+            .ToList();
+    }
+
+    private IReadOnlyList<ProfitResult> SortProfitRows(IReadOnlyList<ProfitResult> rows)
+    {
+        var sortSpecs = ImGui.TableGetSortSpecs();
+        if (sortSpecs.IsNull || sortSpecs.SpecsCount == 0)
+        {
+            return rows;
+        }
+
+        var spec = sortSpecs.Specs;
+        var ascending = spec.SortDirection == ImGuiSortDirection.Ascending;
+        IOrderedEnumerable<ProfitResult> ordered = spec.ColumnIndex switch
+        {
+            0 => ascending
+                ? rows.OrderBy(result => result.Item.ItemName, StringComparer.OrdinalIgnoreCase)
+                : rows.OrderByDescending(result => result.Item.ItemName, StringComparer.OrdinalIgnoreCase),
+            1 => ascending
+                ? rows.OrderBy(result => result.Item.Cost)
+                : rows.OrderByDescending(result => result.Item.Cost),
+            2 => ascending
+                ? rows.OrderBy(result => result.Market.Sales24h)
+                : rows.OrderByDescending(result => result.Market.Sales24h),
+            3 => ascending
+                ? rows.OrderBy(result => result.Market.UnitsSold24h)
+                : rows.OrderByDescending(result => result.Market.UnitsSold24h),
+            4 => ascending
+                ? rows.OrderBy(result => result.Market.CurrentFloor ?? uint.MaxValue)
+                : rows.OrderByDescending(result => result.Market.CurrentFloor ?? 0),
+            5 => ascending
+                ? rows.OrderBy(result => result.GilPerCurrency ?? double.MaxValue)
+                : rows.OrderByDescending(result => result.GilPerCurrency ?? 0),
+            6 => ascending
+                ? rows.OrderBy(result => result.FinalScore)
+                : rows.OrderByDescending(result => result.FinalScore),
+            7 => ascending
+                ? rows.OrderBy(result => result.Confidence, StringComparer.OrdinalIgnoreCase)
+                : rows.OrderByDescending(result => result.Confidence, StringComparer.OrdinalIgnoreCase),
+            8 => ascending
+                ? rows.OrderBy(result => VendorText(result.Item), StringComparer.OrdinalIgnoreCase)
+                : rows.OrderByDescending(result => VendorText(result.Item), StringComparer.OrdinalIgnoreCase),
+            9 => ascending
+                ? rows.OrderBy(result => result.Item.SourceZone ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+                : rows.OrderByDescending(result => result.Item.SourceZone ?? string.Empty, StringComparer.OrdinalIgnoreCase),
+            _ => rows.OrderByDescending(result => result.FinalScore),
+        };
+
+        return ordered
+            .ThenBy(result => result.Item.ItemName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     private static string VendorText(SpendableCurrencyItem item)

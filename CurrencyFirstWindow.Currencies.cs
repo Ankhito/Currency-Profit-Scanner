@@ -18,23 +18,30 @@ public sealed partial class CurrencyFirstWindow
             return;
         }
 
-        if (!ImGui.BeginTable("currencies", 9, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.Resizable | ImGuiTableFlags.ScrollX))
+        const ImGuiTableFlags flags = ImGuiTableFlags.Borders |
+            ImGuiTableFlags.RowBg |
+            ImGuiTableFlags.Resizable |
+            ImGuiTableFlags.ScrollX |
+            ImGuiTableFlags.Sortable |
+            ImGuiTableFlags.SizingFixedFit;
+        if (!ImGui.BeginTable("currencies", 9, flags))
         {
             return;
         }
 
         ImGui.TableSetupColumn("Icon", ImGuiTableColumnFlags.WidthFixed, 42);
-        ImGui.TableSetupColumn("Currency");
-        ImGui.TableSetupColumn("Amount");
-        ImGui.TableSetupColumn("Full");
-        ImGui.TableSetupColumn("Shop items");
-        ImGui.TableSetupColumn("Sellable");
-        ImGui.TableSetupColumn("Best gil/cur");
-        ImGui.TableSetupColumn("Best item");
-        ImGui.TableSetupColumn("Action", ImGuiTableColumnFlags.NoSort);
+        ImGui.TableSetupColumn("Currency", ImGuiTableColumnFlags.WidthFixed, 220f);
+        ImGui.TableSetupColumn("Amount", ImGuiTableColumnFlags.WidthFixed, 120f);
+        ImGui.TableSetupColumn("Full", ImGuiTableColumnFlags.WidthFixed, 60f);
+        ImGui.TableSetupColumn("Shop", ImGuiTableColumnFlags.WidthFixed, 62f);
+        ImGui.TableSetupColumn("Sellable", ImGuiTableColumnFlags.WidthFixed, 72f);
+        ImGui.TableSetupColumn("Best gil/cur", ImGuiTableColumnFlags.WidthFixed, 96f);
+        ImGui.TableSetupColumn("Best item", ImGuiTableColumnFlags.WidthFixed, 220f);
+        ImGui.TableSetupColumn("Action", ImGuiTableColumnFlags.NoSort | ImGuiTableColumnFlags.WidthFixed, 82f);
+        ImGui.TableSetupScrollFreeze(1, 1);
         ImGui.TableHeadersRow();
 
-        foreach (var currency in this.scannerService.Currencies)
+        foreach (var currency in this.SortCurrencies(this.scannerService.Currencies))
         {
             ImGui.TableNextRow();
             this.Cell(currency.IconId == 0 ? "-" : $"#{currency.IconId}");
@@ -55,5 +62,51 @@ public sealed partial class CurrencyFirstWindow
         }
 
         ImGui.EndTable();
+    }
+
+    private IReadOnlyList<TrackedCurrencyModel> SortCurrencies(IReadOnlyList<TrackedCurrencyModel> currencies)
+    {
+        var sortSpecs = ImGui.TableGetSortSpecs();
+        if (sortSpecs.IsNull || sortSpecs.SpecsCount == 0)
+        {
+            return currencies;
+        }
+
+        var spec = sortSpecs.Specs;
+        var ascending = spec.SortDirection == ImGuiSortDirection.Ascending;
+        IOrderedEnumerable<TrackedCurrencyModel> ordered = spec.ColumnIndex switch
+        {
+            1 => ascending
+                ? currencies.OrderBy(currency => currency.Name, StringComparer.OrdinalIgnoreCase)
+                : currencies.OrderByDescending(currency => currency.Name, StringComparer.OrdinalIgnoreCase),
+            2 => ascending
+                ? currencies.OrderBy(currency => currency.CurrentAmount ?? 0)
+                : currencies.OrderByDescending(currency => currency.CurrentAmount ?? 0),
+            3 => ascending
+                ? currencies.OrderBy(currency => FillPercent(currency))
+                : currencies.OrderByDescending(currency => FillPercent(currency)),
+            4 => ascending
+                ? currencies.OrderBy(currency => this.scannerService.GetAllItemsForCurrency(currency).Count)
+                : currencies.OrderByDescending(currency => this.scannerService.GetAllItemsForCurrency(currency).Count),
+            5 => ascending
+                ? currencies.OrderBy(currency => this.scannerService.GetSellableItemsForCurrency(currency).Count)
+                : currencies.OrderByDescending(currency => this.scannerService.GetSellableItemsForCurrency(currency).Count),
+            6 => ascending
+                ? currencies.OrderBy(currency => this.scannerService.GetBestGilPerCurrency(currency) ?? double.MaxValue)
+                : currencies.OrderByDescending(currency => this.scannerService.GetBestGilPerCurrency(currency) ?? 0),
+            7 => ascending
+                ? currencies.OrderBy(currency => this.scannerService.GetBestItemName(currency) ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+                : currencies.OrderByDescending(currency => this.scannerService.GetBestItemName(currency) ?? string.Empty, StringComparer.OrdinalIgnoreCase),
+            _ => currencies.OrderBy(currency => currency.Name, StringComparer.OrdinalIgnoreCase),
+        };
+
+        return ordered.ThenBy(currency => currency.Name, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private static double FillPercent(TrackedCurrencyModel currency)
+    {
+        return currency.CurrentAmount is not null && currency.MaxAmount is > 0
+            ? currency.CurrentAmount.Value / (double)currency.MaxAmount.Value
+            : 0d;
     }
 }
