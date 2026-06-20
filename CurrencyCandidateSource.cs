@@ -171,15 +171,16 @@ public sealed class CurrencyCandidateSource
                     var received = entry.ReceiveItems[i];
                     var cost = entry.ItemCosts[i];
                     var itemId = received.Item.RowId;
-                    var costItemId = cost.ItemCost.RowId;
+                    var rawCostItemId = cost.ItemCost.RowId;
+                    var costItemId = this.ConvertCurrencyId(shop.RowId, rawCostItemId, shop.UseCurrencyType);
 
                     // SpecialShop contains many empty padded slots. Skip these silently; they are not invalid data.
-                    if (itemId == 0 && costItemId == 0 && cost.CurrencyCost == 0 && received.ReceiveCount == 0)
+                    if (itemId == 0 && rawCostItemId == 0 && cost.CurrencyCost == 0 && received.ReceiveCount == 0)
                     {
                         continue;
                     }
 
-                    if (itemId == 0 || costItemId == 0 || cost.CurrencyCost == 0 || received.ReceiveCount == 0)
+                    if (itemId == 0 || rawCostItemId == 0 || costItemId == 0 || cost.CurrencyCost == 0 || received.ReceiveCount == 0)
                     {
                         continue;
                     }
@@ -228,8 +229,8 @@ public sealed class CurrencyCandidateSource
                         sourceShopName,
                         null,
                         marketable
-                            ? $"Lumina SpecialShop row {shop.RowId}; receive/cost index {i}."
-                            : $"Lumina SpecialShop row {shop.RowId}; non-marketable reward at receive/cost index {i}.",
+                            ? $"Lumina SpecialShop row {shop.RowId}; receive/cost index {i}; raw currency {rawCostItemId}."
+                            : $"Lumina SpecialShop row {shop.RowId}; non-marketable reward at receive/cost index {i}; raw currency {rawCostItemId}.",
                         null,
                         null,
                         null,
@@ -245,6 +246,54 @@ public sealed class CurrencyCandidateSource
         }
 
         return new CandidateBatch(currencies, candidates, invalid, unmarketable);
+    }
+
+    private uint ConvertCurrencyId(uint specialShopId, uint itemId, ushort useCurrencyType)
+    {
+        if (specialShopId == 1770637)
+        {
+            return CurrencyTypeMap.GetValueOrDefault(itemId, itemId);
+        }
+
+        if (specialShopId == 1770446 || (specialShopId == 1770699 && itemId < 10))
+        {
+            return CurrencyTypeMap.GetValueOrDefault(itemId, this.GetTomestoneCurrencyId(itemId) ?? itemId);
+        }
+
+        if ((useCurrencyType == 2 || useCurrencyType == 4) && itemId < 10)
+        {
+            return this.GetTomestoneCurrencyId(itemId) ?? itemId;
+        }
+
+        if (useCurrencyType == 16 && itemId < 10)
+        {
+            return CurrencyTypeMap.GetValueOrDefault(itemId, itemId);
+        }
+
+        return itemId;
+    }
+
+    private uint? GetTomestoneCurrencyId(uint itemId)
+    {
+        if (itemId == 1)
+        {
+            return 28;
+        }
+
+        try
+        {
+            var tomestoneSheet = this.dataManager.GetExcelSheet<TomestonesItem>();
+            return itemId switch
+            {
+                2 => tomestoneSheet?.FirstOrDefault(item => item.Tomestones.RowId is 2).Item.RowId,
+                3 => tomestoneSheet?.FirstOrDefault(item => item.Tomestones.RowId is 3).Item.RowId,
+                _ => null,
+            };
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private CandidateBatch LoadSeedCandidates(Lumina.Excel.ExcelSheet<Item> itemSheet)
@@ -485,6 +534,38 @@ public sealed class CurrencyCandidateSource
         new(48147, "Oizys Credit", 10000, "Known currency catalog: Cosmic Exploration"),
         new(48148, "Auxesia Credit", 10000, "Known currency catalog: Cosmic Exploration"),
     ];
+
+    private static readonly Dictionary<uint, uint> CurrencyTypeMap = new()
+    {
+        [1] = 10309,
+        [2] = 33913,
+        [3] = 10311,
+        [4] = 33914,
+        [5] = 10307,
+        [6] = 41784,
+        [7] = 41785,
+        [8] = 21072,
+        [9] = 21073,
+        [10] = 21074,
+        [11] = 21075,
+        [12] = 21076,
+        [13] = 21077,
+        [14] = 21078,
+        [15] = 21079,
+        [16] = 21080,
+        [17] = 21081,
+        [18] = 21172,
+        [19] = 21173,
+        [20] = 21935,
+        [21] = 22525,
+        [22] = 26533,
+        [23] = 26807,
+        [24] = 28063,
+        [25] = 28186,
+        [26] = 28187,
+        [27] = 28188,
+        [28] = 30341,
+    };
 
     private static bool IsMarketable(Item item) => !item.IsUntradable && item.ItemSearchCategory.RowId > 0;
 
