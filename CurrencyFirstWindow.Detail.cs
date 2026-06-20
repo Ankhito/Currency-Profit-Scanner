@@ -27,17 +27,18 @@ public sealed partial class CurrencyFirstWindow
         ImGui.TextUnformatted($"Sellable: {this.scannerService.GetSellableItemsForCurrency(currency).Count:N0}");
         ImGui.TextUnformatted($"Universalis target: {this.EffectiveWorldOrDc}");
         ImGui.TextUnformatted($"Market source: {this.universalisClient.Status}");
-        if (this.scannerService.IsRefreshing)
+        var canRefresh = !this.scannerService.IsRefreshing && !string.IsNullOrWhiteSpace(this.EffectiveWorldOrDc);
+        if (!canRefresh)
         {
             ImGui.BeginDisabled();
         }
 
         if (ImGui.Button(this.scannerService.IsRefreshing ? "Refreshing..." : "Refresh"))
         {
-            _ = this.scannerService.RefreshSelectedCurrencyAsync(this.EffectiveWorldOrDc);
+            this.RefreshSelectedCurrency();
         }
 
-        if (this.scannerService.IsRefreshing)
+        if (!canRefresh)
         {
             ImGui.EndDisabled();
         }

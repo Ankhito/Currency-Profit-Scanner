@@ -155,6 +155,22 @@ public sealed partial class CurrencyFirstWindow : IDisposable
         ImGui.TextUnformatted(this.scannerService.Status);
     }
 
+    private void RefreshSelectedCurrency()
+    {
+        if (this.scannerService.IsRefreshing)
+        {
+            return;
+        }
+
+        var target = this.EffectiveWorldOrDc;
+        if (string.IsNullOrWhiteSpace(target))
+        {
+            return;
+        }
+
+        _ = this.scannerService.RefreshSelectedCurrencyAsync(target);
+    }
+
     private void Cell(string value)
     {
         ImGui.TableNextColumn();

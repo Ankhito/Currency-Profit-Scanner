@@ -30,5 +30,22 @@ public sealed partial class CurrencyFirstWindow
         ImGui.TextUnformatted($"Items requested: {this.universalisClient.LastItemsRequested:N0}");
         ImGui.TextUnformatted($"Items returned: {this.universalisClient.LastItemsReturned:N0}");
         ImGui.TextUnformatted($"Last error: {this.universalisClient.LastError ?? "none"}");
+        if (this.scannerService.SelectedCurrency is not null)
+        {
+            if (string.IsNullOrWhiteSpace(this.EffectiveWorldOrDc) || this.scannerService.IsRefreshing)
+            {
+                ImGui.BeginDisabled();
+            }
+
+            if (ImGui.Button(this.scannerService.IsRefreshing ? "Refreshing market..." : "Refresh selected currency market"))
+            {
+                this.RefreshSelectedCurrency();
+            }
+
+            if (string.IsNullOrWhiteSpace(this.EffectiveWorldOrDc) || this.scannerService.IsRefreshing)
+            {
+                ImGui.EndDisabled();
+            }
+        }
     }
 }

@@ -50,6 +50,7 @@ public sealed partial class CurrencyFirstWindow
             {
                 this.scannerService.SelectCurrency(currency);
                 this.detailOpen = true;
+                this.RefreshSelectedCurrency();
             }
         }
 
