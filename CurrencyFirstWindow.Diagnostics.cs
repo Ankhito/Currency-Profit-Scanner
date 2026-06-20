@@ -25,7 +25,10 @@ public sealed partial class CurrencyFirstWindow
         ImGui.TextUnformatted($"Duplicates: {candidate.CandidateDuplicateCount:N0}");
         ImGui.Separator();
         ImGui.TextUnformatted($"Universalis: {this.universalisClient.Status}");
+        ImGui.TextUnformatted($"Target: {this.EffectiveWorldOrDc}");
+        ImGui.TextUnformatted($"Last URL: {this.universalisClient.LastRequestUrl ?? "never"}");
         ImGui.TextUnformatted($"Items requested: {this.universalisClient.LastItemsRequested:N0}");
         ImGui.TextUnformatted($"Items returned: {this.universalisClient.LastItemsReturned:N0}");
+        ImGui.TextUnformatted($"Last error: {this.universalisClient.LastError ?? "none"}");
     }
 }

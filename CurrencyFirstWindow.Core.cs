@@ -140,6 +140,12 @@ public sealed partial class CurrencyFirstWindow : IDisposable
             this.configuration.Save();
         }
 
+        if (string.IsNullOrWhiteSpace(this.EffectiveWorldOrDc))
+        {
+            ImGui.SameLine();
+            ImGui.TextColored(CurrencyUi.Gold, "Enter a world, data center, or region before refreshing.");
+        }
+
         if (ImGui.Button("Reload"))
         {
             this.scannerService.ReloadCandidates();
@@ -156,6 +162,8 @@ public sealed partial class CurrencyFirstWindow : IDisposable
     }
 
     private static string FormatGil(double? value) => value is null ? "Unknown" : value.Value.ToString("N2");
+
+    private string EffectiveWorldOrDc => this.configuration.PreferredWorldOrDc.Trim();
 
     private static void CenterText(string text, float scale, Vector4 color)
     {

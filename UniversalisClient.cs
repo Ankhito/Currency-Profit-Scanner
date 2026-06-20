@@ -41,6 +41,8 @@ public sealed class UniversalisClient : IDisposable
 
     public bool LastFetchUsedCache { get; private set; }
 
+    public string? LastRequestUrl { get; private set; }
+
     public async Task<IReadOnlyDictionary<uint, MarketData>> GetMarketDataAsync(
         string worldOrDc,
         IReadOnlyCollection<uint> itemIds,
@@ -103,10 +105,13 @@ public sealed class UniversalisClient : IDisposable
     {
         var ids = string.Join(",", itemIds);
         var url = $"{BaseUrl}/{worldOrDc}/{ids}?listings=100&entriesToReturn=100";
+        this.LastRequestUrl = url;
 
         try
         {
-            using var response = await this.httpClient.GetAsync(url, cancellationToken).ConfigureAwait(false);
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.UserAgent.ParseAdd("CurrencyProfitScanner/0.1 (+https://github.com/Ankhito/Currency-Profit-Scanner)");
+            using var response = await this.httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
             if (response.StatusCode == HttpStatusCode.TooManyRequests)
             {
                 return itemIds.ToDictionary(id => id, id => ErrorData(id, "Universalis rate limit"));
@@ -114,7 +119,9 @@ public sealed class UniversalisClient : IDisposable
 
             if (!response.IsSuccessStatusCode)
             {
-                return itemIds.ToDictionary(id => id, id => ErrorData(id, $"Universalis HTTP {(int)response.StatusCode}"));
+                var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                var detail = string.IsNullOrWhiteSpace(body) ? string.Empty : $": {TrimForStatus(body)}";
+                return itemIds.ToDictionary(id => id, id => ErrorData(id, $"Universalis HTTP {(int)response.StatusCode}{detail}"));
             }
 
             await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
@@ -131,7 +138,7 @@ public sealed class UniversalisClient : IDisposable
             var payload = await JsonSerializer.DeserializeAsync<UniversalisMultiItemResponse>(stream, JsonOptions, cancellationToken).ConfigureAwait(false);
             if (payload?.Items is null)
             {
-                return itemIds.ToDictionary(id => id, id => ErrorData(id, "Malformed Universalis response"));
+                return itemIds.ToDictionary(id => id, id => ErrorData(id, "Malformed Universalis multi-item response"));
             }
 
             return itemIds.ToDictionary(id => id, id => Normalize(id, payload.Items.TryGetValue(id.ToString(), out var item) ? item : null));
@@ -145,6 +152,12 @@ public sealed class UniversalisClient : IDisposable
             this.log.Warning(ex, "Failed to fetch Universalis data");
             return itemIds.ToDictionary(id => id, id => ErrorData(id, "Universalis request failed"));
         }
+    }
+
+    private static string TrimForStatus(string value)
+    {
+        var singleLine = value.ReplaceLineEndings(" ").Trim();
+        return singleLine.Length <= 160 ? singleLine : $"{singleLine[..160]}...";
     }
 
     private static MarketData Normalize(uint itemId, UniversalisItemResponse? item)
