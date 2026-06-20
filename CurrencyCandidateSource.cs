@@ -63,7 +63,6 @@ public sealed class CurrencyCandidateSource
             currencies.AddRange(this.LoadKnownCurrencies(itemSheet));
 
             var specialShopResult = this.LoadSpecialShopCandidates(itemSheet);
-            currencies.AddRange(specialShopResult.Currencies);
             items.AddRange(specialShopResult.Candidates);
             invalid += specialShopResult.InvalidCount;
             unmarketable += specialShopResult.UnmarketableCount;
@@ -76,7 +75,6 @@ public sealed class CurrencyCandidateSource
         try
         {
             var seedResult = this.LoadSeedCandidates(itemSheet);
-            currencies.AddRange(seedResult.Currencies);
             items.AddRange(seedResult.Candidates);
             invalid += seedResult.InvalidCount;
             unmarketable += seedResult.UnmarketableCount;
@@ -95,15 +93,6 @@ public sealed class CurrencyCandidateSource
                 duplicates++;
             }
         }
-
-        currencies.AddRange(dedupedItems.Values.Select(item => new TrackedCurrencyModel(
-            item.CurrencyId,
-            item.CurrencyName,
-            item.CurrencyIconId,
-            null,
-            null,
-            true,
-            item.SourceNotes ?? item.SourceShopName ?? "Spendable item")));
 
         var dedupedCurrencies = new Dictionary<string, TrackedCurrencyModel>(StringComparer.Ordinal);
         foreach (var currency in currencies)
@@ -141,8 +130,8 @@ public sealed class CurrencyCandidateSource
             LuminaItemSheetAvailable: true,
             MarketabilityPath: "Item.ItemSearchCategory.RowId > 0 and Item.IsUntradable == false",
             CandidateSourceType: usedFallbackCurrencies
-                ? "Built-in currency catalog fallback + Lumina/JSON item enrichment"
-                : "Known currency catalog + Lumina SpecialShop + validated JSON seed",
+                ? "CurrencySpender tracked currency catalog fallback"
+                : "CurrencySpender tracked currency catalog + Lumina/JSON item enrichment",
             CandidateLoadStatus: statusText,
             CandidateCount: dedupedItems.Count,
             CandidateInvalidCount: invalid,
