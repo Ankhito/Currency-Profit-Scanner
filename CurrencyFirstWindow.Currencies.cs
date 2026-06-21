@@ -18,6 +18,15 @@ public sealed partial class CurrencyFirstWindow
             return;
         }
 
+        var visibleCurrencies = this.scannerService.Currencies
+            .Where(currency => this.scannerService.GetSellableItemsForCurrency(currency).Count > 0)
+            .ToList();
+        var hiddenCount = this.scannerService.Currencies.Count - visibleCurrencies.Count;
+        if (hiddenCount > 0)
+        {
+            ImGui.TextDisabled($"Hiding {hiddenCount:N0} tracked currenc{(hiddenCount == 1 ? "y" : "ies")} with no known marketable rewards.");
+        }
+
         const ImGuiTableFlags flags = ImGuiTableFlags.Borders |
             ImGuiTableFlags.RowBg |
             ImGuiTableFlags.Resizable |
@@ -41,7 +50,7 @@ public sealed partial class CurrencyFirstWindow
         ImGui.TableSetupScrollFreeze(1, 1);
         ImGui.TableHeadersRow();
 
-        foreach (var currency in this.SortCurrencies(this.scannerService.Currencies))
+        foreach (var currency in this.SortCurrencies(visibleCurrencies))
         {
             var best = this.scannerService.GetBestResult(currency);
             ImGui.TableNextRow();

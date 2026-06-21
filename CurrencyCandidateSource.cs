@@ -66,10 +66,20 @@ public sealed class CurrencyCandidateSource
             items.AddRange(specialShopResult.Candidates);
             invalid += specialShopResult.InvalidCount;
             unmarketable += specialShopResult.UnmarketableCount;
+
+            var gcShopResult = this.LoadGrandCompanySealCandidates(itemSheet);
+            items.AddRange(gcShopResult.Candidates);
+            invalid += gcShopResult.InvalidCount;
+            unmarketable += gcShopResult.UnmarketableCount;
+
+            var customResult = this.LoadCustomCurrencyCandidates(itemSheet);
+            items.AddRange(customResult.Candidates);
+            invalid += customResult.InvalidCount;
+            unmarketable += customResult.UnmarketableCount;
         }
         catch (Exception ex)
         {
-            lastError = $"SpecialShop load failed: {ex.Message}";
+            lastError = $"Lumina shop load failed: {ex.Message}";
         }
 
         try
@@ -241,6 +251,147 @@ public sealed class CurrencyCandidateSource
                         true,
                         false));
                 }
+            }
+        }
+
+        return new CandidateBatch(currencies, candidates, invalid, unmarketable);
+    }
+
+    private CandidateBatch LoadGrandCompanySealCandidates(Lumina.Excel.ExcelSheet<Item> itemSheet)
+    {
+        var currencies = new List<TrackedCurrencyModel>();
+        var candidates = new List<SpendableCurrencyItem>();
+        var invalid = 0;
+        var unmarketable = 0;
+        var categorySheet = this.dataManager.GetExcelSheet<GCScripShopCategory>();
+        var gcItemSheet = this.dataManager.GetSubrowExcelSheet<GCScripShopItem>();
+        if (categorySheet is null || gcItemSheet is null)
+        {
+            return new CandidateBatch(currencies, candidates, invalid, unmarketable);
+        }
+
+        foreach (var gc in GrandCompanyCurrencies)
+        {
+            var currency = this.BuildCurrencyModel(itemSheet, gc.CurrencyId, gc.Name, 0, 90000, "GC seal shop");
+            if (currency is not null)
+            {
+                currencies.Add(currency);
+            }
+
+            foreach (var category in categorySheet.Where(category => category.GrandCompany.RowId == gc.GrandCompanyId))
+            {
+                for (var i = 0; i < gcItemSheet.TotalSubrowCount; i++)
+                {
+                    var row = gcItemSheet.GetSubrow(category.RowId, (ushort)i);
+                    if (row.RowId == 0)
+                    {
+                        break;
+                    }
+
+                    var itemId = row.Item.RowId;
+                    if (itemId == 0 || row.CostGCSeals == 0)
+                    {
+                        continue;
+                    }
+
+                    var item = itemSheet.GetRow(itemId);
+                    if (item.RowId != itemId)
+                    {
+                        invalid++;
+                        continue;
+                    }
+
+                    if (!IsMarketable(item))
+                    {
+                        unmarketable++;
+                        continue;
+                    }
+
+                    candidates.Add(new SpendableCurrencyItem(
+                        itemId,
+                        item.Name.ExtractText(),
+                        item.Icon,
+                        gc.CurrencyId,
+                        gc.Name,
+                        currency?.IconId ?? 0,
+                        row.CostGCSeals,
+                        1,
+                        null,
+                        $"{gc.Name} exchange",
+                        null,
+                        $"Lumina GCScripShopCategory row {category.RowId}; subrow {i}.",
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        SpendableItemKind.Sellable,
+                        true,
+                        false));
+                }
+            }
+        }
+
+        return new CandidateBatch(currencies, candidates, invalid, unmarketable);
+    }
+
+    private CandidateBatch LoadCustomCurrencyCandidates(Lumina.Excel.ExcelSheet<Item> itemSheet)
+    {
+        var currencies = new List<TrackedCurrencyModel>();
+        var candidates = new List<SpendableCurrencyItem>();
+        var invalid = 0;
+        var unmarketable = 0;
+
+        foreach (var shop in CustomCurrencyShops)
+        {
+            var currency = this.BuildCurrencyModel(itemSheet, shop.CurrencyId, null, 0, null, "CurrencySpender custom shop mapping");
+            if (currency is null)
+            {
+                invalid++;
+                continue;
+            }
+
+            currencies.Add(currency);
+            foreach (var itemId in shop.ItemIds)
+            {
+                var item = itemSheet.GetRow(itemId);
+                if (item.RowId != itemId)
+                {
+                    invalid++;
+                    continue;
+                }
+
+                if (!IsMarketable(item))
+                {
+                    unmarketable++;
+                    continue;
+                }
+
+                candidates.Add(new SpendableCurrencyItem(
+                    itemId,
+                    item.Name.ExtractText(),
+                    item.Icon,
+                    currency.CurrencyId,
+                    currency.Name,
+                    currency.IconId,
+                    shop.Cost,
+                    1,
+                    "Orbitingway Gamba",
+                    shop.ShopName,
+                    "Cosmic Exploration",
+                    "CurrencySpender custom shop mapping.",
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    SpendableItemKind.Sellable,
+                    true,
+                    false));
             }
         }
 
@@ -532,7 +683,20 @@ public sealed class CurrencyCandidateSource
         new(45691, "Lunar Credit", 10000, "Known currency catalog: Cosmic Exploration"),
         new(48146, "Phaenna Credit", 10000, "Known currency catalog: Cosmic Exploration"),
         new(48147, "Oizys Credit", 10000, "Known currency catalog: Cosmic Exploration"),
-        new(48148, "Auxesia Credit", 10000, "Known currency catalog: Cosmic Exploration"),
+    ];
+
+    private static readonly GrandCompanyCurrency[] GrandCompanyCurrencies =
+    [
+        new(1, 20, "Storm Seal"),
+        new(2, 21, "Serpent Seal"),
+        new(3, 22, "Flame Seal"),
+    ];
+
+    private static readonly CustomCurrencyShop[] CustomCurrencyShops =
+    [
+        new(45691, "Lunar Credit exchange", 1000, [44505, 44509, 47966, 48154, 48160, 48210, 48220, 48221]),
+        new(48146, "Phaenna Credit exchange", 1000, [47973, 46795, 46782, 46840, 46155]),
+        new(48147, "Oizys Credit exchange", 1000, [47973, 44509, 46795, 46782, 47095, 47937, 46840, 48154, 48160, 46155, 48210, 48220, 48221]),
     ];
 
     private static readonly Dictionary<uint, uint> CurrencyTypeMap = new()
@@ -658,4 +822,8 @@ public sealed class CurrencyCandidateSource
         int UnmarketableCount);
 
     private sealed record KnownCurrency(uint CurrencyId, string Name, uint? MaxAmount, string Source);
+
+    private sealed record GrandCompanyCurrency(uint GrandCompanyId, uint CurrencyId, string Name);
+
+    private sealed record CustomCurrencyShop(uint CurrencyId, string ShopName, uint Cost, uint[] ItemIds);
 }

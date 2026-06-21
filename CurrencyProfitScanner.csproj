@@ -6,9 +6,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>CurrencyProfitScanner</AssemblyName>
     <RootNamespace>CurrencyProfitScanner</RootNamespace>
-    <Version>0.1.13</Version>
-    <AssemblyVersion>0.1.13.0</AssemblyVersion>
-    <FileVersion>0.1.13.0</FileVersion>
+    <Version>0.1.14</Version>
+    <AssemblyVersion>0.1.14.0</AssemblyVersion>
+    <FileVersion>0.1.14.0</FileVersion>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <DalamudHome Condition="'$(DALAMUD_HOME)' != ''">$(DALAMUD_HOME)</DalamudHome>
