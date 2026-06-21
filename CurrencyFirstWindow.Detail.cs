@@ -126,7 +126,10 @@ public sealed partial class CurrencyFirstWindow
         {
             var item = result.Item;
             ImGui.TableNextRow();
-            this.Cell(item.ItemName);
+            ImGui.TableNextColumn();
+            this.DrawIcon(item.IconId, 22f);
+            ImGui.SameLine();
+            ImGui.TextUnformatted(item.ItemName);
             this.Cell(item.QuantityReceived == 1 ? item.Cost.ToString("N0") : $"{item.Cost:N0} / {item.QuantityReceived:N0}");
             this.Cell(result.Market.Sales24h.ToString("N0"));
             this.Cell(result.Market.UnitsSold24h.ToString("N0"));

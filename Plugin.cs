@@ -1,4 +1,5 @@
 using Dalamud.Game.Command;
+using Dalamud.Interface.Textures;
 using Dalamud.IoC;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
@@ -21,6 +22,9 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService]
     internal static IPluginLog Log { get; private set; } = null!;
 
+    [PluginService]
+    internal static ITextureProvider TextureProvider { get; private set; } = null!;
+
     private readonly PluginConfiguration configuration;
     private readonly CurrencyCandidateSource candidateSource;
     private readonly UniversalisClient universalisClient;
@@ -41,7 +45,7 @@ public sealed class Plugin : IDalamudPlugin
         this.ipcDiagnosticsService = new IpcDiagnosticsService();
         this.navigationIpcService = new NavigationIpcService(PluginInterface, Log);
         this.luminaDiscoveryService = new LuminaDiscoveryService(DataManager);
-        this.scannerWindow = new CurrencyFirstWindow(this.configuration, this.scannerService, this.universalisClient, this.ipcDiagnosticsService, this.navigationIpcService);
+        this.scannerWindow = new CurrencyFirstWindow(this.configuration, this.scannerService, this.universalisClient, this.ipcDiagnosticsService, this.navigationIpcService, TextureProvider);
 
         PluginInterface.UiBuilder.Draw += this.DrawUi;
         PluginInterface.UiBuilder.OpenConfigUi += this.OpenConfigUi;

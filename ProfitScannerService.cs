@@ -156,15 +156,15 @@ public sealed class ProfitScannerService : IDisposable
 
     public double? GetBestGilPerCurrency(TrackedCurrencyModel currency)
     {
-        return this.GetResultsForCurrency(currency)
-            .Where(result => result.Market.Sales24h > 0)
-            .Select(result => result.GilPerCurrency)
-            .Where(value => value.HasValue)
-            .DefaultIfEmpty()
-            .Max();
+        return this.GetBestResult(currency)?.GilPerCurrency;
     }
 
     public string? GetBestItemName(TrackedCurrencyModel currency)
+    {
+        return this.GetBestResult(currency)?.Item.ItemName;
+    }
+
+    public ProfitResult? GetBestResult(TrackedCurrencyModel currency)
     {
         return this.GetResultsForCurrency(currency)
             .Where(result => result.Market.Sales24h > 0)
@@ -172,8 +172,7 @@ public sealed class ProfitScannerService : IDisposable
             .ThenByDescending(result => result.Market.Sales24h)
             .ThenByDescending(result => result.Market.UnitsSold24h)
             .ThenByDescending(result => result.GilPerCurrency ?? 0)
-            .FirstOrDefault()
-            ?.Item.ItemName;
+            .FirstOrDefault();
     }
 
     public async Task RefreshSelectedCurrencyAsync(string worldOrDc)

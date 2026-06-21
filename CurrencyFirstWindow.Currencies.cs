@@ -43,15 +43,16 @@ public sealed partial class CurrencyFirstWindow
 
         foreach (var currency in this.SortCurrencies(this.scannerService.Currencies))
         {
+            var best = this.scannerService.GetBestResult(currency);
             ImGui.TableNextRow();
-            this.Cell(currency.IconId == 0 ? "-" : $"#{currency.IconId}");
+            this.IconCell(currency.IconId, 28f);
             this.Cell(currency.Name);
             this.Cell(currency.CurrentAmount is null ? "Unknown" : $"{currency.CurrentAmount:N0}/{currency.MaxAmount?.ToString("N0") ?? "?"}");
             this.Cell(currency.CurrentAmount is not null && currency.MaxAmount is > 0 ? $"{currency.CurrentAmount.Value * 100d / currency.MaxAmount.Value:N0}%" : "Unknown");
             this.Cell(this.scannerService.GetAllItemsForCurrency(currency).Count.ToString("N0"));
             this.Cell(this.scannerService.GetSellableItemsForCurrency(currency).Count.ToString("N0"));
-            this.Cell(FormatGil(this.scannerService.GetBestGilPerCurrency(currency)));
-            this.Cell(this.scannerService.GetBestItemName(currency) ?? "Unknown");
+            this.Cell(FormatGil(best?.GilPerCurrency));
+            this.Cell(best?.Item.ItemName ?? "Unknown");
             ImGui.TableNextColumn();
             if (ImGui.Button($"Spend it##{currency.CurrencyId}-{currency.Name}"))
             {
@@ -92,11 +93,11 @@ public sealed partial class CurrencyFirstWindow
                 ? currencies.OrderBy(currency => this.scannerService.GetSellableItemsForCurrency(currency).Count)
                 : currencies.OrderByDescending(currency => this.scannerService.GetSellableItemsForCurrency(currency).Count),
             6 => ascending
-                ? currencies.OrderBy(currency => this.scannerService.GetBestGilPerCurrency(currency) ?? double.MaxValue)
-                : currencies.OrderByDescending(currency => this.scannerService.GetBestGilPerCurrency(currency) ?? 0),
+                ? currencies.OrderBy(currency => this.scannerService.GetBestResult(currency)?.GilPerCurrency ?? double.MaxValue)
+                : currencies.OrderByDescending(currency => this.scannerService.GetBestResult(currency)?.GilPerCurrency ?? 0),
             7 => ascending
-                ? currencies.OrderBy(currency => this.scannerService.GetBestItemName(currency) ?? string.Empty, StringComparer.OrdinalIgnoreCase)
-                : currencies.OrderByDescending(currency => this.scannerService.GetBestItemName(currency) ?? string.Empty, StringComparer.OrdinalIgnoreCase),
+                ? currencies.OrderBy(currency => this.scannerService.GetBestResult(currency)?.Item.ItemName ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+                : currencies.OrderByDescending(currency => this.scannerService.GetBestResult(currency)?.Item.ItemName ?? string.Empty, StringComparer.OrdinalIgnoreCase),
             _ => currencies.OrderBy(currency => currency.Name, StringComparer.OrdinalIgnoreCase),
         };
 

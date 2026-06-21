@@ -1,5 +1,7 @@
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface.Textures;
+using Dalamud.Plugin.Services;
 
 namespace CurrencyProfitScanner;
 
@@ -10,6 +12,7 @@ public sealed partial class CurrencyFirstWindow : IDisposable
     private readonly UniversalisClient universalisClient;
     private readonly IpcDiagnosticsService ipcDiagnosticsService;
     private readonly NavigationIpcService navigationIpcService;
+    private readonly ITextureProvider textureProvider;
     private bool detailOpen;
     private bool detailFocusRequested;
 
@@ -18,13 +21,15 @@ public sealed partial class CurrencyFirstWindow : IDisposable
         ProfitScannerService scannerService,
         UniversalisClient universalisClient,
         IpcDiagnosticsService ipcDiagnosticsService,
-        NavigationIpcService navigationIpcService)
+        NavigationIpcService navigationIpcService,
+        ITextureProvider textureProvider)
     {
         this.configuration = configuration;
         this.scannerService = scannerService;
         this.universalisClient = universalisClient;
         this.ipcDiagnosticsService = ipcDiagnosticsService;
         this.navigationIpcService = navigationIpcService;
+        this.textureProvider = textureProvider;
     }
 
     public bool IsOpen { get; set; }
@@ -93,9 +98,9 @@ public sealed partial class CurrencyFirstWindow : IDisposable
         CenterText("Find the spend that will actually sell.", 1f, CurrencyUi.Dimmed);
         ImGui.Spacing();
         CurrencyUi.Section("Guide");
-        ImGui.TextWrapped("Pick a currency, refresh Universalis market data for your world or data center, then sort rewards by a sellability-adjusted gil score.");
+        ImGui.TextWrapped("Set your world or data center, use Refresh all to rank every marketable currency reward, then open any currency for the detailed Universalis breakdown.");
         ImGui.Spacing();
-        DrawGuideCard(width, "Currencies", "Browse spendable currencies, current amounts, and known shop rewards.");
+        DrawGuideCard(width, "Currencies", "Browse spendable currencies, current amounts, known sellable rewards, and the best ranked spend.");
         DrawGuideCard(width, "Market Board Profit", "Compare floor price, 24h sales, units moved, score, and risk label.");
         DrawGuideCard(width, "Unlocks / Collectables", "Keep non-market rewards visible without letting them pollute profit rankings.");
     }
@@ -251,6 +256,30 @@ public sealed partial class CurrencyFirstWindow : IDisposable
     {
         ImGui.TableNextColumn();
         ImGui.TextUnformatted(value);
+    }
+
+    private void IconCell(uint iconId, float size = 24f)
+    {
+        ImGui.TableNextColumn();
+        this.DrawIcon(iconId, size);
+    }
+
+    private void DrawIcon(uint iconId, float size)
+    {
+        if (iconId == 0)
+        {
+            ImGui.TextDisabled("-");
+            return;
+        }
+
+        var texture = this.textureProvider.GetFromGameIcon(new GameIconLookup(iconId)).GetWrapOrDefault();
+        if (texture is null)
+        {
+            ImGui.TextDisabled("-");
+            return;
+        }
+
+        ImGui.Image(texture.Handle, new Vector2(size, size));
     }
 
     private static string FormatGil(double? value) => value is null ? "Unknown" : value.Value.ToString("N2");
